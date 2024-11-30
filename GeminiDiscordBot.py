@@ -1,4 +1,4 @@
-﻿# Gemini DiscordBot using vertexai
+﻿# Gemini DiscordBot using GeminiAPI
 import os
 import re
 import aiohttp
