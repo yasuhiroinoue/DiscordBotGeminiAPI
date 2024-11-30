@@ -141,7 +141,7 @@ async def generate_response_with_text(message, cleaned_text):
 
 async def generate_response_with_file_and_text(message, file, text, _mime_type):
     """Generate a response based on the provided file and text input."""
-    file_like_object = BytesIO(file)
+    file_like_object = io.BytesIO(file)
     file_part = genai.upload_file(file_like_object, mime_type=_mime_type)
     text_part = f"\n{text if text else 'What is this?'}"
     prompt_parts = [file_part, text_part]
