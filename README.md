@@ -1,14 +1,14 @@
 # Gemini Discord Bot
 
-Gemini Discord Bot is a bot that allows you to converse on Discord using Google's Gemini Pro API. It supports not only text-based conversations but also understanding and responding to an attached file.
+Gemini Discord Bot is a bot that allows you to converse on Discord using Google's Gemini API. It supports not only text-based conversations but also understanding and responding to an attached file.
 
 ## Features
 
-*   **Text-based Conversation**: Utilizes the Gemini Pro API for natural language conversations.
+*   **Text-based Conversation**: Utilizes the Gemini API for natural language conversations.
 *   **Image Recognition**: Recognizes and responds to the content of uploaded images.
 *   **Conversation History**: Maintains conversation history per user for context-aware responses.
 *   **History Reset**:  Resets the conversation history when a user sends `RESET`.
-*   **Discord Mentions and Special Characters Handling**: Properly processes Discord mentions and special characters, sending clean text to the Gemini Pro API.
+*   **Discord Mentions and Special Characters Handling**: Properly processes Discord mentions and special characters, sending clean text to the Gemini API.
 *   **Long Message Splitting**: Splits messages exceeding Discord's character limit (2000 characters) into smaller chunks for seamless transmission.
 
 ## Setup
@@ -37,7 +37,7 @@ Gemini Discord Bot is a bot that allows you to converse on Discord using Google'
 ## Important Notes
 
 *   The Google AI Studio API has usage limits and may incur charges beyond the free tier. Please refer to the Google AI Studio documentation for pricing details.
-*   Please use this bot in compliance with the Gemini Pro API Terms of Service.
+*   Please use this bot in compliance with the Gemini API Terms of Service.
 *   Unexpected errors or inappropriate responses may occur. Please use it with understanding.
 *   If you get error when installing `libmagic`
     *   MacOS: `brew install libmagic`
@@ -47,7 +47,7 @@ Gemini Discord Bot is a bot that allows you to converse on Discord using Google'
 ## Disclaimer
 
 *   The developer is not responsible for any damages caused by the use of this bot.
-*   This bot utilizes the Gemini Pro API, and the developer is not responsible for the content of its responses.
+*   This bot utilizes the Gemini API, and the developer is not responsible for the content of its responses.
 
 ## License
 
