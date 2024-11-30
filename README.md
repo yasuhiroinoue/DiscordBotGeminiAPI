@@ -1,6 +1,6 @@
 # Gemini Discord Bot
 
-Gemini Discord Bot is a bot that allows you to converse on Discord using Google's Gemini Pro API. It supports not only text-based conversations but also understanding and responding to attached files.
+Gemini Discord Bot is a bot that allows you to converse on Discord using Google's Gemini Pro API. It supports not only text-based conversations but also understanding and responding to an attached file.
 
 ## Features
 
@@ -31,7 +31,7 @@ Gemini Discord Bot is a bot that allows you to converse on Discord using Google'
 ## Usage
 
 *   **Text Conversation**: Mention the bot or send a direct message (DM) to the bot to start a conversation.
-*   **File Recognition**: Upload an file with or without accompanying text, and the bot will analyze and respond to its content.
+*   **File Recognition**: Upload a file with or without accompanying text, and the bot will analyze and respond to its content.
 *   **Reset Conversation History**: Send `RESET` to clear the conversation history.
 
 ## Important Notes
