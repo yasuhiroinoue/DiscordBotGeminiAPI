@@ -9,7 +9,6 @@ import discord
 from discord.ext import commands
 from dotenv import load_dotenv
 import google.generativeai as genai
-from io import BytesIO
 
 # Dictionary to store chat sessions
 chat = {}
@@ -63,9 +62,7 @@ async def on_message(message):
         await message.channel.send(f'This is {bot.user}')
         return
 
-    if message.content.startswith('!img') or message.content.startswith('!fimg'):
-        await bot.process_commands(message)
-    elif bot.user.mentioned_in(message) or isinstance(message.channel, discord.DMChannel):
+    if bot.user.mentioned_in(message) or isinstance(message.channel, discord.DMChannel):
         cleaned_text = clean_discord_message(message.content)
         async with message.channel.typing():
             if message.attachments:
