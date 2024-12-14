@@ -8,7 +8,8 @@ import magic
 import discord
 from discord.ext import commands
 from dotenv import load_dotenv
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 
 # Dictionary to store chat sessions
 chat = {}
@@ -16,28 +17,64 @@ chat = {}
 # Load environment variables
 load_dotenv()
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+# Google AI (API KEY)
 GOOGLE_AI_KEY = os.getenv("GOOGLE_AI_KEY")
+
+# VertexAI
+GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
+GCP_REGION = os.getenv("GCP_REGION")
 
 # The maximum number of characters per Discord message
 MAX_DISCORD_LENGTH = 2000
 
 # Configure the generative AI model
-text_generation_config = {
-    "temperature": 1,
-    "top_p": 0.95,
-    "max_output_tokens": 8192,
-}
+# text_generation_config = {
+#     "temperature": 1,
+#     "top_p": 0.95,
+#     "max_output_tokens": 8192,
+# }
 
-safety_settings = [
-    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_ONLY_HIGH"},
-    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_ONLY_HIGH"},
-    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_ONLY_HIGH"},
-    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_ONLY_HIGH"}
+# safety_settings = [
+#     {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_ONLY_HIGH"},
+#     {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_ONLY_HIGH"},
+#     {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_ONLY_HIGH"},
+#     {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_ONLY_HIGH"}
+# ]
+
+# Tool to support Google Search in Model
+tools = [
+    types.Tool(google_search=types.GoogleSearch())
 ]
 
-# Initialize generative AI model
+generate_content_config = types.GenerateContentConfig(
+    temperature = 1,
+    top_p = 0.95,
+    max_output_tokens = 8192,
+    response_modalities = ["TEXT"],
+    safety_settings = [types.SafetySetting(
+      category="HARM_CATEGORY_HATE_SPEECH",
+      threshold="OFF"
+    ),types.SafetySetting(
+      category="HARM_CATEGORY_DANGEROUS_CONTENT",
+      threshold="OFF"
+    ),types.SafetySetting(
+      category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
+      threshold="OFF"
+    ),types.SafetySetting(
+      category="HARM_CATEGORY_HARASSMENT",
+      threshold="OFF"
+    )],
+    tools = tools,
+  )
+MODEL_ID = "gemini-2.0-flash-exp"
+
+# Initialize Google AI via API_KEY
 genai.configure(api_key=GOOGLE_AI_KEY)
-chat_model = genai.GenerativeModel(model_name="gemini-exp-1121", generation_config=text_generation_config, safety_settings=safety_settings)
+
+# Only run this block for Vertex AI API
+# chat_model = genai.Client(
+#     vertexai=True, project=GCP_PROJECT_ID, location=GCP_REGION
+# )
 
 # Initialize Discord bot
 intents = discord.Intents.default()
@@ -127,7 +164,10 @@ async def generate_response_with_text(message, cleaned_text):
     user_id = message.author.id
     chat_session = chat.get(user_id)
     if not chat_session:
-        chat_session = chat_model.start_chat()
+        chat_session = chat_model.chats.create(
+            model=MODEL_ID,
+            config=generate_content_config,
+        )
         chat[user_id] = chat_session
     try:
         answer = await async_send_message(chat_session, cleaned_text)
@@ -141,19 +181,25 @@ async def generate_response_with_text(message, cleaned_text):
 
 async def generate_response_with_file_and_text(message, file, text, _mime_type):
     """Generate a response based on the provided file and text input."""
-    file_like_object = io.BytesIO(file)
-    file_part = genai.upload_file(file_like_object, mime_type=_mime_type)
-    text_part = f"\n{text if text else 'What is this?'}"
-    prompt_parts = [file_part, text_part]
-
     global chat
     user_id = message.author.id
     chat_session = chat.get(user_id)
     if not chat_session:
-        chat_session = chat_model.start_chat()
+        chat_session = chat_model.chats.create(
+            model=MODEL_ID,
+            config=generate_content_config,
+        )
         chat[user_id] = chat_session
     try:
+        # file_like_object = io.BytesIO(file)
+ 
+        text_part = f"\n{text if text else 'What is this?'}"
+        file_byte = types.Part.from_bytes(data=file, mime_type=_mime_type)
+        prompt_parts = [text_part, file_byte]
+
+
         answer = await async_send_message(chat_session, prompt_parts)
+
         if answer.candidates and answer.candidates[0].content.parts:
             return answer.candidates[0].content.parts[0].text
         else:
