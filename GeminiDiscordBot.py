@@ -69,7 +69,7 @@ generate_content_config = types.GenerateContentConfig(
 MODEL_ID = "gemini-2.0-flash-exp"
 
 # Initialize Google AI via API_KEY
-genai.configure(api_key=GOOGLE_AI_KEY)
+chat_model = genai.Client(api_key=GOOGLE_AI_KEY)
 
 # Only run this block for Vertex AI API
 # chat_model = genai.Client(
