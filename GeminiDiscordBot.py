@@ -11,6 +11,9 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
+MODEL_ID = "gemini-2.0-flash-exp"
+# MODEL_ID = "gemini-exp-1206"
+
 # Dictionary to store chat sessions
 chat = {}
 
@@ -21,8 +24,8 @@ DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 GOOGLE_AI_KEY = os.getenv("GOOGLE_AI_KEY")
 
 # VertexAI
-GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
-GCP_REGION = os.getenv("GCP_REGION")
+# GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
+# GCP_REGION = os.getenv("GCP_REGION")
 
 # The maximum number of characters per Discord message
 MAX_DISCORD_LENGTH = 2000
@@ -66,7 +69,6 @@ generate_content_config = types.GenerateContentConfig(
     )],
     tools = tools,
   )
-MODEL_ID = "gemini-2.0-flash-exp"
 
 # Initialize Google AI via API_KEY
 chat_model = genai.Client(api_key=GOOGLE_AI_KEY)
@@ -171,8 +173,113 @@ async def generate_response_with_text(message, cleaned_text):
         chat[user_id] = chat_session
     try:
         answer = await async_send_message(chat_session, cleaned_text)
+        # candidate = answer.candidates[0]
+        # # print(candidate)
+        # # GroundingMetadataの参照
+        # gm = candidate.grounding_metadata
+        # # grounding_supportsをループして、そこから関連するgrounding_chunksを引く
+        # for support in gm.grounding_supports:
+        #     # このsupportに関連するgrounding_chunkのインデックスリスト
+        #     indices = support.grounding_chunk_indices
+            
+        #     # それぞれのインデックスから参照先を取得
+        #     for idx in indices:
+        #         chunk = gm.grounding_chunks[idx]
+        #         # chunk.web.titleやchunk.web.uriを参照することで実際の出典情報が得られる
+        #         print("Title:", chunk.web.title)
+        #         print("URI:", chunk.web.uri)
+        #         print("---")
         if answer.candidates and answer.candidates[0].content.parts:
-            return answer.candidates[0].content.parts[0].text
+            # return answer.candidates[0].content.parts[0].text
+            candidate = answer.candidates[0]
+            gm = candidate.grounding_metadata
+            original_text = candidate.content.parts[0].text
+
+            if not gm.grounding_supports:
+                # grounding_supportsが空の場合は参照をつけずにそのまま出力
+                response_text = original_text
+                return response_text
+            else:
+                # print("grounding_supportsがある場合は、ここに先ほどの処理を入れる")
+                import re
+                
+                ref_dict = {}
+                
+                for support in gm.grounding_supports:
+                    import re
+
+                    candidate = answer.candidates[0]
+                    gm = candidate.grounding_metadata
+                    original_text = candidate.content.parts[0].text
+
+                    if not gm.grounding_supports:
+                        # grounding_supportsが空の場合は参照をつけずにそのまま出力
+                        response_text = original_text
+                    else:
+                        ref_dict = {}
+                        for support in gm.grounding_supports:
+                            text = support.segment.text
+                            refs_found = re.findall(r'\[(\d+(?:,\s*\d+)*)\]', text)
+                            # 引用番号が見つからない場合は次のsupportへ
+                            if not refs_found:
+                                continue
+                            
+                            for ref_group in refs_found:
+                                ref_nums = [r.strip() for r in ref_group.split(',')]
+                                # 引用番号の数とgrounding_chunk_indicesが一致する場合のみ処理
+                                if len(ref_nums) == len(support.grounding_chunk_indices):
+                                    for i, ref_num in enumerate(ref_nums):
+                                        idx = support.grounding_chunk_indices[i]
+                                        # index範囲チェック
+                                        if idx < len(gm.grounding_chunks):
+                                            chunk = gm.grounding_chunks[idx]
+                                            if chunk.web:
+                                                uri = chunk.web.uri
+                                                if ref_num not in ref_dict:
+                                                    ref_dict[ref_num] = uri
+
+                        if ref_dict:
+                            ref = "References:\n"
+                            for ref_num in sorted(ref_dict, key=lambda x: int(x)):
+                                ref += f"[{ref_num}] {ref_dict[ref_num]}\n"
+                            response_text = f"{original_text}\n{ref}"
+                        else:
+                            # 引用があるはずなのにref_dictが空の場合、またはrefsが無かった場合
+                            response_text = original_text
+
+                    return response_text
+
+                    # debug code is as follows.
+                    # text = support.segment.text
+                    # print("segment.text:", text)
+
+                    # refs_found = re.findall(r'\[(\d+(?:,\s*\d+)*)\]', text)
+                    # print("refs_found:", refs_found)
+
+                    # for ref_group in refs_found:
+                    #     ref_nums = [r.strip() for r in ref_group.split(',')]
+                    #     print("ref_nums:", ref_nums)
+                    #     print("grounding_chunk_indices:", support.grounding_chunk_indices)
+
+                    #     if len(ref_nums) == len(support.grounding_chunk_indices):
+                    #         for i, ref_num in enumerate(ref_nums):
+                    #             idx = support.grounding_chunk_indices[i]
+                    #             # idxがgrounding_chunks内で有効なインデックスか確認
+                    #             if idx < len(gm.grounding_chunks):
+                    #                 chunk = gm.grounding_chunks[idx]
+                    #                 print("chunk:", chunk)
+                    #                 if chunk.web:
+                    #                     uri = chunk.web.uri
+                    #                     if ref_num not in ref_dict:
+                    #                         ref_dict[ref_num] = uri
+                    #                 else:
+                    #                     print(f"chunk.web is None for idx {idx}")
+                    #             else:
+                    #                 print(f"Index {idx} is out of range for grounding_chunks")
+                    #     else:
+                    #         print("ref_numsとsupport.grounding_chunk_indicesの長さが合いません")
+
+
         else:
             return "No valid response received."
     except Exception as e:
