@@ -167,6 +167,57 @@ async def process_text_message(message, cleaned_text):
 
     await split_and_send_messages(message, response_text, MAX_DISCORD_LENGTH)
 
+def process_answer(answer):
+    """
+    Process the LLM response to concatenate all parts and handle grounding metadata.
+    """
+    if answer.candidates and answer.candidates[0].content.parts:
+        # 全ての parts を連結して取得
+        original_text = "".join([part.text for part in answer.candidates[0].content.parts if part.text])
+
+        candidate = answer.candidates[0]
+        gm = candidate.grounding_metadata
+
+        if not gm.grounding_supports:
+            # grounding_supports が空の場合は参照をつけずにそのまま出力
+            return original_text
+        else:
+            # grounding_supports がある場合は参照を処理
+            import re
+            ref_dict = {}
+
+            for support in gm.grounding_supports:
+                text = support.segment.text
+                refs_found = re.findall(r'\[(\d+(?:,\s*\d+)*)\]', text)
+                # 引用番号が見つからない場合は次の support へ
+                if not refs_found:
+                    continue
+                
+                for ref_group in refs_found:
+                    ref_nums = [r.strip() for r in ref_group.split(',')]
+                    # 引用番号の数と grounding_chunk_indices が一致する場合のみ処理
+                    if len(ref_nums) == len(support.grounding_chunk_indices):
+                        for i, ref_num in enumerate(ref_nums):
+                            idx = support.grounding_chunk_indices[i]
+                            # index 範囲チェック
+                            if idx < len(gm.grounding_chunks):
+                                chunk = gm.grounding_chunks[idx]
+                                if chunk.web:
+                                    uri = chunk.web.uri
+                                    if ref_num not in ref_dict:
+                                        ref_dict[ref_num] = uri
+
+            if ref_dict:
+                ref = "References:\n"
+                for ref_num in sorted(ref_dict, key=lambda x: int(x)):
+                    ref += f"[{ref_num}] {ref_dict[ref_num]}\n"
+                return f"{original_text}\n{ref}"
+            else:
+                # 引用があるはずなのに ref_dict が空の場合、または refs が無かった場合
+                return original_text
+    else:
+        return "No valid response received."
+
 async def generate_response_with_text(message, cleaned_text):
     """Generate a response based on the provided text input."""
     global chat
@@ -180,72 +231,73 @@ async def generate_response_with_text(message, cleaned_text):
         chat[user_id] = chat_session
     try:
         answer = await async_send_message(chat_session, cleaned_text)
+        return process_answer(answer)
 
-        if answer.candidates and answer.candidates[0].content.parts:
+        # if answer.candidates and answer.candidates[0].content.parts:
             
-            # 全ての parts を連結して取得
-            original_text = "".join([part.text for part in answer.candidates[0].content.parts if part.text])
-            # return response_text
-            # return answer.candidates[0].content.parts[0].text
-            candidate = answer.candidates[0]
-            gm = candidate.grounding_metadata
-            # original_text = candidate.content.parts[0].text
+        #     # 全ての parts を連結して取得
+        #     original_text = "".join([part.text for part in answer.candidates[0].content.parts if part.text])
+        #     # return response_text
+        #     # return answer.candidates[0].content.parts[0].text
+        #     candidate = answer.candidates[0]
+        #     gm = candidate.grounding_metadata
+        #     # original_text = candidate.content.parts[0].text
 
-            if not gm.grounding_supports:
-                # grounding_supportsが空の場合は参照をつけずにそのまま出力
-                response_text = original_text
-                return response_text
-            else:
-                # print("grounding_supportsがある場合は、ここに先ほどの処理を入れる")
-                import re
+        #     if not gm.grounding_supports:
+        #         # grounding_supportsが空の場合は参照をつけずにそのまま出力
+        #         response_text = original_text
+        #         return response_text
+        #     else:
+        #         # print("grounding_supportsがある場合は、ここに先ほどの処理を入れる")
+        #         import re
                 
-                ref_dict = {}
+        #         ref_dict = {}
                 
-                for support in gm.grounding_supports:
-                    import re
+        #         for support in gm.grounding_supports:
+        #             import re
 
-                    candidate = answer.candidates[0]
-                    gm = candidate.grounding_metadata
+        #             candidate = answer.candidates[0]
+        #             gm = candidate.grounding_metadata
 
-                    if not gm.grounding_supports:
-                        # grounding_supportsが空の場合は参照をつけずにそのまま出力
-                        response_text = original_text
-                    else:
-                        ref_dict = {}
-                        for support in gm.grounding_supports:
-                            text = support.segment.text
-                            refs_found = re.findall(r'\[(\d+(?:,\s*\d+)*)\]', text)
-                            # 引用番号が見つからない場合は次のsupportへ
-                            if not refs_found:
-                                continue
+        #             if not gm.grounding_supports:
+        #                 # grounding_supportsが空の場合は参照をつけずにそのまま出力
+        #                 response_text = original_text
+        #             else:
+        #                 ref_dict = {}
+        #                 for support in gm.grounding_supports:
+        #                     text = support.segment.text
+        #                     refs_found = re.findall(r'\[(\d+(?:,\s*\d+)*)\]', text)
+        #                     # 引用番号が見つからない場合は次のsupportへ
+        #                     if not refs_found:
+        #                         continue
                             
-                            for ref_group in refs_found:
-                                ref_nums = [r.strip() for r in ref_group.split(',')]
-                                # 引用番号の数とgrounding_chunk_indicesが一致する場合のみ処理
-                                if len(ref_nums) == len(support.grounding_chunk_indices):
-                                    for i, ref_num in enumerate(ref_nums):
-                                        idx = support.grounding_chunk_indices[i]
-                                        # index範囲チェック
-                                        if idx < len(gm.grounding_chunks):
-                                            chunk = gm.grounding_chunks[idx]
-                                            if chunk.web:
-                                                uri = chunk.web.uri
-                                                if ref_num not in ref_dict:
-                                                    ref_dict[ref_num] = uri
+        #                     for ref_group in refs_found:
+        #                         ref_nums = [r.strip() for r in ref_group.split(',')]
+        #                         # 引用番号の数とgrounding_chunk_indicesが一致する場合のみ処理
+        #                         if len(ref_nums) == len(support.grounding_chunk_indices):
+        #                             for i, ref_num in enumerate(ref_nums):
+        #                                 idx = support.grounding_chunk_indices[i]
+        #                                 # index範囲チェック
+        #                                 if idx < len(gm.grounding_chunks):
+        #                                     chunk = gm.grounding_chunks[idx]
+        #                                     if chunk.web:
+        #                                         uri = chunk.web.uri
+        #                                         if ref_num not in ref_dict:
+        #                                             ref_dict[ref_num] = uri
 
-                        if ref_dict:
-                            ref = "References:\n"
-                            for ref_num in sorted(ref_dict, key=lambda x: int(x)):
-                                ref += f"[{ref_num}] {ref_dict[ref_num]}\n"
-                            response_text = f"{original_text}\n{ref}"
-                        else:
-                            # 引用があるはずなのにref_dictが空の場合、またはrefsが無かった場合
-                            response_text = original_text
+        #                 if ref_dict:
+        #                     ref = "References:\n"
+        #                     for ref_num in sorted(ref_dict, key=lambda x: int(x)):
+        #                         ref += f"[{ref_num}] {ref_dict[ref_num]}\n"
+        #                     response_text = f"{original_text}\n{ref}"
+        #                 else:
+        #                     # 引用があるはずなのにref_dictが空の場合、またはrefsが無かった場合
+        #                     response_text = original_text
 
-                    return response_text
+        #             return response_text
 
-        else:
-            return "No valid response received."
+        # else:
+        #     return "No valid response received."
     except Exception as e:
         print(f"An error occurred: {e}")
         return "An error occurred while generating the response."
@@ -270,11 +322,11 @@ async def generate_response_with_file_and_text(message, file, text, _mime_type):
 
 
         answer = await async_send_message(chat_session, prompt_parts)
-
-        if answer.candidates and answer.candidates[0].content.parts:
-            return answer.candidates[0].content.parts[0].text
-        else:
-            return "No valid response received."
+        return process_answer(answer)
+        # if answer.candidates and answer.candidates[0].content.parts:
+        #     return answer.candidates[0].content.parts[0].text
+        # else:
+        #     return "No valid response received."
     except Exception as e:
         print(f"An error occurred: {e}")
         return "An error occurred while generating the response."
