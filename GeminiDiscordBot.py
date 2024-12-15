@@ -12,6 +12,11 @@ from google import genai
 from google.genai import types
 
 MODEL_ID = "gemini-2.0-flash-exp"
+IMAGEN_MODEL='imagen-3.0-generate-001'
+
+# Load the environment variable for enabling/disabling commands
+IMG_COMMANDS_ENABLED = os.getenv('IMG_COMMANDS_ENABLED', 'False').lower() == 'true'
+
 # MODEL_ID = "gemini-exp-1206"
 
 # Dictionary to store chat sessions
@@ -21,28 +26,14 @@ chat = {}
 load_dotenv()
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 # Google AI (API KEY)
-GOOGLE_AI_KEY = os.getenv("GOOGLE_AI_KEY")
+# GOOGLE_AI_KEY = os.getenv("GOOGLE_AI_KEY")
 
 # VertexAI
-# GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
-# GCP_REGION = os.getenv("GCP_REGION")
+GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
+GCP_REGION = os.getenv("GCP_REGION")
 
 # The maximum number of characters per Discord message
 MAX_DISCORD_LENGTH = 2000
-
-# Configure the generative AI model
-# text_generation_config = {
-#     "temperature": 1,
-#     "top_p": 0.95,
-#     "max_output_tokens": 8192,
-# }
-
-# safety_settings = [
-#     {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_ONLY_HIGH"},
-#     {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_ONLY_HIGH"},
-#     {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_ONLY_HIGH"},
-#     {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_ONLY_HIGH"}
-# ]
 
 # Tool to support Google Search in Model
 tools = [
@@ -71,12 +62,13 @@ generate_content_config = types.GenerateContentConfig(
   )
 
 # Initialize Google AI via API_KEY
-chat_model = genai.Client(api_key=GOOGLE_AI_KEY)
+# chat_model = genai.Client(api_key=GOOGLE_AI_KEY)
 
 # Only run this block for Vertex AI API
-# chat_model = genai.Client(
-#     vertexai=True, project=GCP_PROJECT_ID, location=GCP_REGION
-# )
+chat_model = genai.Client(
+    vertexai=True, project=GCP_PROJECT_ID, location=GCP_REGION
+)
+
 
 # Initialize Discord bot
 intents = discord.Intents.default()
@@ -101,7 +93,13 @@ async def on_message(message):
         await message.channel.send(f'This is {bot.user}')
         return
 
-    if bot.user.mentioned_in(message) or isinstance(message.channel, discord.DMChannel):
+    if message.content.startswith('!img'):
+        await bot.process_commands(message)
+        # For debug
+        # print(message.content)
+        # print(clean_discord_message(message.content))
+        #
+    elif bot.user.mentioned_in(message) or isinstance(message.channel, discord.DMChannel):
         cleaned_text = clean_discord_message(message.content)
         async with message.channel.typing():
             if message.attachments:
@@ -144,6 +142,12 @@ async def async_send_message(chat_session, prompt):
     loop = asyncio.get_running_loop()
     try:
         response = await loop.run_in_executor(None, chat_session.send_message, prompt)
+        # For debug
+        # print(response)
+        # print("Response parts:")
+        # for part in response.candidates[0].content.parts:
+        #     print(part.text)
+        #
         return response
     except Exception as e:
         print(f"Error sending message: {e}")
@@ -158,6 +162,7 @@ async def process_text_message(message, cleaned_text):
 
     await message.add_reaction('💬')
     response_text = await generate_response_with_text(message, cleaned_text)
+
     await split_and_send_messages(message, response_text, MAX_DISCORD_LENGTH)
 
 async def generate_response_with_text(message, cleaned_text):
@@ -173,27 +178,16 @@ async def generate_response_with_text(message, cleaned_text):
         chat[user_id] = chat_session
     try:
         answer = await async_send_message(chat_session, cleaned_text)
-        # candidate = answer.candidates[0]
-        # # print(candidate)
-        # # GroundingMetadataの参照
-        # gm = candidate.grounding_metadata
-        # # grounding_supportsをループして、そこから関連するgrounding_chunksを引く
-        # for support in gm.grounding_supports:
-        #     # このsupportに関連するgrounding_chunkのインデックスリスト
-        #     indices = support.grounding_chunk_indices
-            
-        #     # それぞれのインデックスから参照先を取得
-        #     for idx in indices:
-        #         chunk = gm.grounding_chunks[idx]
-        #         # chunk.web.titleやchunk.web.uriを参照することで実際の出典情報が得られる
-        #         print("Title:", chunk.web.title)
-        #         print("URI:", chunk.web.uri)
-        #         print("---")
+
         if answer.candidates and answer.candidates[0].content.parts:
+            
+            # 全ての parts を連結して取得
+            original_text = "".join([part.text for part in answer.candidates[0].content.parts if part.text])
+            # return response_text
             # return answer.candidates[0].content.parts[0].text
             candidate = answer.candidates[0]
             gm = candidate.grounding_metadata
-            original_text = candidate.content.parts[0].text
+            # original_text = candidate.content.parts[0].text
 
             if not gm.grounding_supports:
                 # grounding_supportsが空の場合は参照をつけずにそのまま出力
@@ -210,7 +204,6 @@ async def generate_response_with_text(message, cleaned_text):
 
                     candidate = answer.candidates[0]
                     gm = candidate.grounding_metadata
-                    original_text = candidate.content.parts[0].text
 
                     if not gm.grounding_supports:
                         # grounding_supportsが空の場合は参照をつけずにそのまま出力
@@ -248,37 +241,6 @@ async def generate_response_with_text(message, cleaned_text):
                             response_text = original_text
 
                     return response_text
-
-                    # debug code is as follows.
-                    # text = support.segment.text
-                    # print("segment.text:", text)
-
-                    # refs_found = re.findall(r'\[(\d+(?:,\s*\d+)*)\]', text)
-                    # print("refs_found:", refs_found)
-
-                    # for ref_group in refs_found:
-                    #     ref_nums = [r.strip() for r in ref_group.split(',')]
-                    #     print("ref_nums:", ref_nums)
-                    #     print("grounding_chunk_indices:", support.grounding_chunk_indices)
-
-                    #     if len(ref_nums) == len(support.grounding_chunk_indices):
-                    #         for i, ref_num in enumerate(ref_nums):
-                    #             idx = support.grounding_chunk_indices[i]
-                    #             # idxがgrounding_chunks内で有効なインデックスか確認
-                    #             if idx < len(gm.grounding_chunks):
-                    #                 chunk = gm.grounding_chunks[idx]
-                    #                 print("chunk:", chunk)
-                    #                 if chunk.web:
-                    #                     uri = chunk.web.uri
-                    #                     if ref_num not in ref_dict:
-                    #                         ref_dict[ref_num] = uri
-                    #                 else:
-                    #                     print(f"chunk.web is None for idx {idx}")
-                    #             else:
-                    #                 print(f"Index {idx} is out of range for grounding_chunks")
-                    #     else:
-                    #         print("ref_numsとsupport.grounding_chunk_indicesの長さが合いません")
-
 
         else:
             return "No valid response received."
@@ -338,5 +300,71 @@ async def split_and_send_messages(message_system, text, max_length):
         await message_system.channel.send(text[start:end].strip())
         start = end
 
+async def generate_image(prompt_text, negative_text, aspect_ratio):
+    # ######################
+    # Generate Image
+    # ######################    
+    response1 = chat_model.models.generate_image(
+        model= IMAGEN_MODEL,
+        prompt= prompt_text,
+        config=types.GenerateImageConfig(
+            negative_prompt= negative_text,
+            number_of_images= 1,
+            aspect_ratio = aspect_ratio,
+            include_rai_reason= True,
+            output_mime_type= "image/jpeg"
+        )
+    )
+
+    image = response1.generated_images[0].image
+
+    return image
+
+async def handle_generation(ctx, prompt, negative_prompt, aspect_ratio):
+    try:
+        image = await generate_image(prompt, negative_prompt, aspect_ratio)
+        with io.BytesIO(image.image_bytes) as image_binary:
+            file = discord.File(image_binary, filename="generated_image.jpg")
+            await ctx.send(file=file)
+
+        file_data = image.image_bytes
+        mime_type = get_mime_type_from_bytes(file_data)
+        prompt_message = f"This image was generated by prompt: {prompt}; negative prompt: {negative_prompt}."
+        response_text = await generate_response_with_file_and_text(ctx, file_data, prompt_message, mime_type)
+        await split_and_send_messages(ctx, response_text, MAX_DISCORD_LENGTH)
+    except ValueError as ve:
+        await ctx.send(f"Invalid input provided for image generation: {str(ve)}")
+    except Exception as e:
+        await ctx.send(f"Failed to generate image: {str(e)}")
+
+async def parse_args(args):
+    parts = [part.strip() for part in args.split('|')]
+    prompt = parts[0] if len(parts) > 0 else ""
+    negative_prompt = ""
+    aspect_ratio = "16:9"
+    if len(parts) > 1:
+        if re.match(r'^\d+:\d+$', parts[1]):
+            aspect_ratio = parts[1]
+        else:
+            negative_prompt = parts[1]
+    if len(parts) > 2:
+        aspect_ratio = parts[2]
+    return prompt, negative_prompt, aspect_ratio
+
+@bot.command(name='img')
+async def generate(ctx, *, args):
+    if not IMG_COMMANDS_ENABLED:
+        await ctx.send("The feature is currently disabled")
+        return
+    
+    try:
+        await ctx.message.add_reaction('🎨')
+        prompt_text, negative_text, aspect_ratio = await parse_args(args)
+        await ctx.send(f"Prompt: {prompt_text}\nNegative Prompt: {negative_text}")
+        await handle_generation(ctx, prompt_text,negative_text, aspect_ratio)
+    except Exception as e:
+        await ctx.send(f"An error occurred: {str(e)}")
+
+#On Message Function
 # Run the bot
 bot.run(DISCORD_BOT_TOKEN)
