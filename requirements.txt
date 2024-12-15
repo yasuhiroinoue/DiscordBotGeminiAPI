@@ -1,6 +1,6 @@
 discord.py
 python-dotenv
-google-generativeai
+google-genai
 aiohttp
 python-magic
 libmagic
