@@ -3,4 +3,3 @@ python-dotenv
 google-genai
 aiohttp
 python-magic
-libmagic
