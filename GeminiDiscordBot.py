@@ -14,8 +14,6 @@ from google.genai import types
 MODEL_ID = "gemini-2.0-flash-exp"
 IMAGEN_MODEL='imagen-3.0-generate-001'
 
-# Load the environment variable for enabling/disabling commands
-IMG_COMMANDS_ENABLED = os.getenv('IMG_COMMANDS_ENABLED', 'False').lower() == 'true'
 
 # MODEL_ID = "gemini-exp-1206"
 
@@ -34,6 +32,10 @@ GCP_REGION = os.getenv("GCP_REGION")
 
 # The maximum number of characters per Discord message
 MAX_DISCORD_LENGTH = 2000
+
+# Load the environment variable for enabling/disabling commands
+IMG_COMMANDS_ENABLED = os.getenv('IMG_COMMANDS_ENABLED', 'False').lower() == 'true'
+print(IMG_COMMANDS_ENABLED)
 
 # Tool to support Google Search in Model
 tools = [
