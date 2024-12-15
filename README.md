@@ -1,54 +1,92 @@
 # Gemini Discord Bot
 
-Gemini Discord Bot is a bot that allows you to converse on Discord using Google's Gemini API. It supports not only text-based conversations but also understanding and responding to an attached file.
+Gemini Discord Bot allows you to converse on Discord using Google's Gemini API. It supports text-based conversations and responds to attached files.
 
 ## Features
 
-*   **Text-based Conversation**: Utilizes the Gemini API for natural language conversations.
-*   **Image Recognition**: Recognizes and responds to the content of uploaded images.
-*   **Conversation History**: Maintains conversation history per user for context-aware responses.
-*   **History Reset**:  Resets the conversation history when a user sends `RESET`.
-*   **Discord Mentions and Special Characters Handling**: Properly processes Discord mentions and special characters, sending clean text to the Gemini API.
-*   **Long Message Splitting**: Splits messages exceeding Discord's character limit (2000 characters) into smaller chunks for seamless transmission.
+- **Text-based Conversation**: Utilizes the Gemini API for natural language conversations.
+- **Image Recognition**: Recognizes and responds to the content of uploaded images.
+- **File Recognition**: Analyzes and responds to the content of uploaded files.
+- **Conversation History**: Maintains user-specific conversation history for context-aware responses.
+- **History Reset**: Resets the conversation history when the user sends `RESET`.
+- **Discord Mentions and Special Characters Handling**: Processes mentions and special characters appropriately and sends clean text to the Gemini API.
+- **Long Message Splitting**: Splits messages exceeding Discord's 2000-character limit into smaller chunks for seamless transmission.
+- **Google Search Tool**: Generates responses based on Google Search results.
+- **Image Generation**: Generates images based on text prompts (currently in beta).
+
+---
 
 ## Setup
 
 1. **Create a Discord Bot**:
-    *   Create a bot on the Discord Developer Portal and obtain the Bot Token.
-    *   [Discord Developer Portal](https://discord.com/developers/applications)
+   - Create a bot on the [Discord Developer Portal](https://discord.com/developers/applications) and obtain the Bot Token.
+
 2. **Obtain a Google AI Studio API Key**:
-    *   Get an API Key from Google AI Studio.
-    *   [Google AI Studio](https://makersuite.google.com/)
+   - Get an API Key from [Google AI Studio](https://makersuite.google.com/).
+   - Alternatively, if using Vertex AI API, configure your Google Cloud Platform project credentials.
+
 3. **Set Environment Variables**:
-    *   Create a `.env` file and set the following environment variables:
-        DISCORD_BOT_TOKEN=Your Discord Bot Token
-        GOOGLE_AI_KEY=Your Google AI Studio API Key
+   - Create a `.env` file and set the following variables:
+
+     ```env
+     DISCORD_BOT_TOKEN=Your Discord Bot Token
+     # GOOGLE_AI_KEY=Your Google AI Studio API Key # Not needed for Vertex AI
+     GCP_PROJECT_ID=Your Google Cloud Platform Project ID # Required for Vertex AI
+     GCP_REGION=Your Google Cloud Platform Region # Required for Vertex AI
+     IMG_COMMANDS_ENABLED=True/False # Enable/Disable image generation commands (default: False)
+     ```
+
 4. **Install Dependencies**:
-    pip install -r requirements.txt
+   ```bash
+   pip install -r requirements.txt
+   ```
+
 5. **Run the Bot**:
-    python GeminiDiscordBot.py
+   ```bash
+   python GeminiDiscordBot.py
+   ```
+
+---
 
 ## Usage
 
-*   **Text Conversation**: Mention the bot or send a direct message (DM) to the bot to start a conversation.
-*   **File Recognition**: Upload a file with or without accompanying text, and the bot will analyze and respond to its content.
-*   **Reset Conversation History**: Send `RESET` to clear the conversation history.
+- **Text Conversation**: Mention the bot or send a direct message (DM) to start a conversation.
+- **File Recognition**: Upload a file, with or without accompanying text, and the bot will analyze and respond to its content.
+- **Reset Conversation History**: Send `RESET` to clear the conversation history.
+- **Image Generation**: Use the `!img` command to generate images with the following format:
+  ```text
+  !img <prompt>|<negative prompt>|<aspect ratio>
+  ```
+  - **Prompt**: Describe the image to generate.
+  - **Negative Prompt** (optional): Specify what to exclude.
+  - **Aspect Ratio** (optional): Specify aspect ratio (e.g., `1:1`).
+
+  Example:
+  ```text
+  !img a cute cat|blurry|1:1
+  ```
+
+---
 
 ## Important Notes
 
-*   The Google AI Studio API has usage limits and may incur charges beyond the free tier. Please refer to the Google AI Studio documentation for pricing details.
-*   Please use this bot in compliance with the Gemini API Terms of Service.
-*   Unexpected errors or inappropriate responses may occur. Please use it with understanding.
-*   If you get error when installing `libmagic`
-    *   MacOS: `brew install libmagic`
-    *   Linux(Debian/Ubuntu): `sudo apt-get install libmagic1`
-    *   Windows: Download `libmagic` from the official website and add it to the environment variables.
+- The Google AI Studio API has usage limits and may incur charges beyond the free tier. Refer to the [Google AI Studio documentation](https://makersuite.google.com/) for pricing details.
+- Use this bot in compliance with the Gemini API Terms of Service.
+- Unexpected errors or inappropriate responses may occur. Please use it with discretion.
+- If you encounter errors installing `libmagic`:
+  - **MacOS**: `brew install libmagic`
+  - **Linux (Debian/Ubuntu)**: `sudo apt-get install libmagic1`
+  - **Windows**: Download `libmagic` from the official website and add it to your environment variables.
+
+---
 
 ## Disclaimer
 
-*   The developer is not responsible for any damages caused by the use of this bot.
-*   This bot utilizes the Gemini API, and the developer is not responsible for the content of its responses.
+- The developer is not responsible for any damages caused by the use of this bot.
+- This bot utilizes the Gemini API, and the developer is not responsible for the content of its responses.
+
+---
 
 ## License
 
-MIT License
+This project is licensed under the MIT License.
