@@ -30,9 +30,9 @@ Gemini Discord Bot allows you to converse on Discord using Google's Gemini API. 
 
      ```env
      DISCORD_BOT_TOKEN=Your Discord Bot Token
-     # GOOGLE_AI_KEY=Your Google AI Studio API Key # Not needed for Vertex AI
-     GCP_PROJECT_ID=Your Google Cloud Platform Project ID # Required for Vertex AI
-     GCP_REGION=Your Google Cloud Platform Region # Required for Vertex AI
+     GOOGLE_AI_KEY=Your Google AI Studio API Key # Not needed for Vertex AI
+     # GCP_PROJECT_ID=Your Google Cloud Platform Project ID # Required for Vertex AI
+     # GCP_REGION=Your Google Cloud Platform Region # Required for Vertex AI
      IMG_COMMANDS_ENABLED=True/False # Enable/Disable image generation commands (default: False)
      ```
 
@@ -41,7 +41,23 @@ Gemini Discord Bot allows you to converse on Discord using Google's Gemini API. 
    pip install -r requirements.txt
    ```
 
-5. **Run the Bot**:
+5. **Tools Configuration**
+
+To configure the `generate_content_config` in your code, follow these guidelines:
+
+- The `tools` parameter is included by default in the configuration:
+  ```python
+  generate_content_config = types.GenerateContentConfig(
+      temperature=1,
+      top_p=0.95,
+      max_output_tokens=8192,
+      tools=tools,  # Comment out this line if you are using gemini-2.0-flash-thinking-exp
+      # safety_settings=[...],  # Example safety settings (optional)
+  )
+  ```
+- **Important Note**: When using `gemini-2.0-flash-thinking-exp`, ensure that the `tools` parameter is commented out. This configuration ensures compatibility with the specific version.
+
+6. **Run the Bot**:
    ```bash
    python GeminiDiscordBot.py
    ```
