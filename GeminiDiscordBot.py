@@ -25,11 +25,11 @@ chat = {}
 load_dotenv()
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 # Google AI (API KEY)
-# GOOGLE_AI_KEY = os.getenv("GOOGLE_AI_KEY")
+GOOGLE_AI_KEY = os.getenv("GOOGLE_AI_KEY")
 
 # VertexAI
-GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
-GCP_REGION = os.getenv("GCP_REGION")
+# GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
+# GCP_REGION = os.getenv("GCP_REGION")
 
 # The maximum number of characters per Discord message
 MAX_DISCORD_LENGTH = 2000
@@ -47,29 +47,29 @@ generate_content_config = types.GenerateContentConfig(
     temperature = 1,
     top_p = 0.95,
     max_output_tokens = 8192,
-    safety_settings = [types.SafetySetting(
-      category="HARM_CATEGORY_HATE_SPEECH",
-      threshold="OFF"
-    ),types.SafetySetting(
-      category="HARM_CATEGORY_DANGEROUS_CONTENT",
-      threshold="OFF"
-    ),types.SafetySetting(
-      category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
-      threshold="OFF"
-    ),types.SafetySetting(
-      category="HARM_CATEGORY_HARASSMENT",
-      threshold="OFF"
-    )],
-    tools = tools,
+    # safety_settings = [types.SafetySetting(
+    #   category="HARM_CATEGORY_HATE_SPEECH",
+    #   threshold="OFF"
+    # ),types.SafetySetting(
+    #   category="HARM_CATEGORY_DANGEROUS_CONTENT",
+    #   threshold="OFF"
+    # ),types.SafetySetting(
+    #   category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
+    #   threshold="OFF"
+    # ),types.SafetySetting(
+    #   category="HARM_CATEGORY_HARASSMENT",
+    #   threshold="OFF"
+    # )],
+    tools = tools, #Comment out if you use gemini-2.0-flash-thinking-exp
   )
 
 # Initialize Google AI via API_KEY
-# chat_model = genai.Client(api_key=GOOGLE_AI_KEY,  http_options={'api_version':'v1alpha'})
+chat_model = genai.Client(api_key=GOOGLE_AI_KEY,  http_options={'api_version':'v1alpha'})
 
 # Initialize Vertex AI API
-chat_model = genai.Client(
-    vertexai=True, project=GCP_PROJECT_ID, location=GCP_REGION
-)
+# chat_model = genai.Client(
+#     vertexai=True, project=GCP_PROJECT_ID, location=GCP_REGION
+# )
 
 # Initialize Discord bot
 intents = discord.Intents.default()
