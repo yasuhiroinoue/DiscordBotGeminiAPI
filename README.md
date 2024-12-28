@@ -41,8 +41,6 @@ Gemini Discord Bot allows you to converse on Discord using Google's Gemini API. 
    pip install -r requirements.txt
    ```
 
-レイアウトの統一感を保つために、「Tools Configuration」セクションを他の部分と同じフォーマットに合わせて修正します。以下のように調整してはいかがでしょうか？
-
 5. **Tools Configuration**:
    To configure the `generate_content_config` in your code, follow these guidelines:
 
