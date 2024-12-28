@@ -42,6 +42,7 @@ Gemini Discord Bot allows you to converse on Discord using Google's Gemini API. 
    ```
 
 5. **Tools Configuration**:
+
    To configure the `generate_content_config` in your code, follow these guidelines:
 
    - The `tools` parameter is included by default in the configuration:
@@ -57,7 +58,7 @@ Gemini Discord Bot allows you to converse on Discord using Google's Gemini API. 
 
    - **Important Note**: When using `gemini-2.0-flash-thinking-exp`, ensure that the `tools` parameter is commented out. This configuration ensures compatibility with the specific version.
 
-6. **Run the Bot**:
+7. **Run the Bot**:
    ```bash
    python GeminiDiscordBot.py
    ```
