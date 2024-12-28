@@ -3,7 +3,7 @@ import os
 import re
 import aiohttp
 import io
-import asyncio
+# import asyncio
 import magic
 import discord
 from discord.ext import commands
@@ -12,10 +12,11 @@ from google import genai
 from google.genai import types
 
 MODEL_ID = "gemini-2.0-flash-exp"
+# MODEL_ID = "gemini-exp-1206"
+# MODEL_ID = "gemini-2.0-flash-thinking-exp" #Google API Alias
+# MODEL_ID = "gemini-2.0-flash-thinking-exp-1219" #VertexAI
 IMAGEN_MODEL='imagen-3.0-generate-001'
 
-
-# MODEL_ID = "gemini-exp-1206"
 
 # Dictionary to store chat sessions
 chat = {}
@@ -46,7 +47,6 @@ generate_content_config = types.GenerateContentConfig(
     temperature = 1,
     top_p = 0.95,
     max_output_tokens = 8192,
-    response_modalities = ["TEXT"],
     safety_settings = [types.SafetySetting(
       category="HARM_CATEGORY_HATE_SPEECH",
       threshold="OFF"
@@ -64,13 +64,12 @@ generate_content_config = types.GenerateContentConfig(
   )
 
 # Initialize Google AI via API_KEY
-# chat_model = genai.Client(api_key=GOOGLE_AI_KEY)
+# chat_model = genai.Client(api_key=GOOGLE_AI_KEY,  http_options={'api_version':'v1alpha'})
 
-# Only run this block for Vertex AI API
+# Initialize Vertex AI API
 chat_model = genai.Client(
     vertexai=True, project=GCP_PROJECT_ID, location=GCP_REGION
 )
-
 
 # Initialize Discord bot
 intents = discord.Intents.default()
@@ -139,21 +138,6 @@ async def process_attachments(message, cleaned_text):
         except Exception as e:
             await message.channel.send(f'An unexpected error occurred: {e}')
 
-async def async_send_message(chat_session, prompt): 
-    """Send a message asynchronously using a chat session."""
-    loop = asyncio.get_running_loop()
-    try:
-        response = await loop.run_in_executor(None, chat_session.send_message, prompt)
-        # For debug
-        # print(response)
-        # print("Response parts:")
-        # for part in response.candidates[0].content.parts:
-        #     print(part.text)
-        #
-        return response
-    except Exception as e:
-        print(f"Error sending message: {e}")
-        return None
 
 async def process_text_message(message, cleaned_text):
     """Processes a text message and generates a response using a chat model."""
@@ -167,137 +151,50 @@ async def process_text_message(message, cleaned_text):
 
     await split_and_send_messages(message, response_text, MAX_DISCORD_LENGTH)
 
-def process_answer(answer):
+#################
+from typing import Any
+import logging
+
+def process_answer(answer: Any) -> str:
     """
-    Process the LLM response to concatenate all parts and handle grounding metadata.
+    Extract the text part from the LLM response for Discord.
+
+    Args:
+        answer: The LLM response object.
+
+    Returns:
+        The response string.
     """
-    if answer.candidates and answer.candidates[0].content.parts:
-        # 全ての parts を連結して取得
-        original_text = "".join([part.text for part in answer.candidates[0].content.parts if part.text])
+    try:
+        text = answer.text.strip()
+        return text
 
-        candidate = answer.candidates[0]
-        gm = candidate.grounding_metadata
+    except AttributeError as e:
+        logging.error(f"Error processing LLM response: Missing 'text' attribute. Answer object type: {type(answer).__name__}")
+        return "Error: An issue occurred while processing the LLM response."
 
-        if not gm.grounding_supports:
-            # grounding_supports が空の場合は参照をつけずにそのまま出力
-            return original_text
-        else:
-            # grounding_supports がある場合は参照を処理
-            import re
-            ref_dict = {}
-
-            for support in gm.grounding_supports:
-                text = support.segment.text
-                refs_found = re.findall(r'\[(\d+(?:,\s*\d+)*)\]', text)
-                # 引用番号が見つからない場合は次の support へ
-                if not refs_found:
-                    continue
-                
-                for ref_group in refs_found:
-                    ref_nums = [r.strip() for r in ref_group.split(',')]
-                    # 引用番号の数と grounding_chunk_indices が一致する場合のみ処理
-                    if len(ref_nums) == len(support.grounding_chunk_indices):
-                        for i, ref_num in enumerate(ref_nums):
-                            idx = support.grounding_chunk_indices[i]
-                            # index 範囲チェック
-                            if idx < len(gm.grounding_chunks):
-                                chunk = gm.grounding_chunks[idx]
-                                if chunk.web:
-                                    uri = chunk.web.uri
-                                    if ref_num not in ref_dict:
-                                        ref_dict[ref_num] = uri
-
-            if ref_dict:
-                ref = "References:\n"
-                for ref_num in sorted(ref_dict, key=lambda x: int(x)):
-                    ref += f"[{ref_num}] {ref_dict[ref_num]}\n"
-                return f"{original_text}\n{ref}"
-            else:
-                # 引用があるはずなのに ref_dict が空の場合、または refs が無かった場合
-                return original_text
-    else:
-        return "No valid response received."
-
+    except Exception as e:
+        error_type = type(e).__name__
+        error_details = str(e)
+        logging.exception(f"Unexpected error processing LLM response: type={error_type}, details={error_details}, Answer object type: {type(answer).__name__}")
+        return "Error: An unexpected error has occurred. See system logs for more information."
+    
+##################
+       
 async def generate_response_with_text(message, cleaned_text):
     """Generate a response based on the provided text input."""
     global chat
     user_id = message.author.id
     chat_session = chat.get(user_id)
     if not chat_session:
-        chat_session = chat_model.chats.create(
+        chat_session = chat_model.aio.chats.create(
             model=MODEL_ID,
             config=generate_content_config,
         )
         chat[user_id] = chat_session
     try:
-        answer = await async_send_message(chat_session, cleaned_text)
+        answer = await chat_session.send_message(cleaned_text)
         return process_answer(answer)
-
-        # if answer.candidates and answer.candidates[0].content.parts:
-            
-        #     # 全ての parts を連結して取得
-        #     original_text = "".join([part.text for part in answer.candidates[0].content.parts if part.text])
-        #     # return response_text
-        #     # return answer.candidates[0].content.parts[0].text
-        #     candidate = answer.candidates[0]
-        #     gm = candidate.grounding_metadata
-        #     # original_text = candidate.content.parts[0].text
-
-        #     if not gm.grounding_supports:
-        #         # grounding_supportsが空の場合は参照をつけずにそのまま出力
-        #         response_text = original_text
-        #         return response_text
-        #     else:
-        #         # print("grounding_supportsがある場合は、ここに先ほどの処理を入れる")
-        #         import re
-                
-        #         ref_dict = {}
-                
-        #         for support in gm.grounding_supports:
-        #             import re
-
-        #             candidate = answer.candidates[0]
-        #             gm = candidate.grounding_metadata
-
-        #             if not gm.grounding_supports:
-        #                 # grounding_supportsが空の場合は参照をつけずにそのまま出力
-        #                 response_text = original_text
-        #             else:
-        #                 ref_dict = {}
-        #                 for support in gm.grounding_supports:
-        #                     text = support.segment.text
-        #                     refs_found = re.findall(r'\[(\d+(?:,\s*\d+)*)\]', text)
-        #                     # 引用番号が見つからない場合は次のsupportへ
-        #                     if not refs_found:
-        #                         continue
-                            
-        #                     for ref_group in refs_found:
-        #                         ref_nums = [r.strip() for r in ref_group.split(',')]
-        #                         # 引用番号の数とgrounding_chunk_indicesが一致する場合のみ処理
-        #                         if len(ref_nums) == len(support.grounding_chunk_indices):
-        #                             for i, ref_num in enumerate(ref_nums):
-        #                                 idx = support.grounding_chunk_indices[i]
-        #                                 # index範囲チェック
-        #                                 if idx < len(gm.grounding_chunks):
-        #                                     chunk = gm.grounding_chunks[idx]
-        #                                     if chunk.web:
-        #                                         uri = chunk.web.uri
-        #                                         if ref_num not in ref_dict:
-        #                                             ref_dict[ref_num] = uri
-
-        #                 if ref_dict:
-        #                     ref = "References:\n"
-        #                     for ref_num in sorted(ref_dict, key=lambda x: int(x)):
-        #                         ref += f"[{ref_num}] {ref_dict[ref_num]}\n"
-        #                     response_text = f"{original_text}\n{ref}"
-        #                 else:
-        #                     # 引用があるはずなのにref_dictが空の場合、またはrefsが無かった場合
-        #                     response_text = original_text
-
-        #             return response_text
-
-        # else:
-        #     return "No valid response received."
     except Exception as e:
         print(f"An error occurred: {e}")
         return "An error occurred while generating the response."
@@ -308,7 +205,7 @@ async def generate_response_with_file_and_text(message, file, text, _mime_type):
     user_id = message.author.id
     chat_session = chat.get(user_id)
     if not chat_session:
-        chat_session = chat_model.chats.create(
+        chat_session = chat_model.aio.chats.create(
             model=MODEL_ID,
             config=generate_content_config,
         )
@@ -321,12 +218,9 @@ async def generate_response_with_file_and_text(message, file, text, _mime_type):
         prompt_parts = [text_part, file_byte]
 
 
-        answer = await async_send_message(chat_session, prompt_parts)
+        answer = await chat_session.send_message(prompt_parts)
         return process_answer(answer)
-        # if answer.candidates and answer.candidates[0].content.parts:
-        #     return answer.candidates[0].content.parts[0].text
-        # else:
-        #     return "No valid response received."
+    
     except Exception as e:
         print(f"An error occurred: {e}")
         return "An error occurred while generating the response."
