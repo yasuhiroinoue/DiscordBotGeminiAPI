@@ -11,8 +11,8 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
-MODEL_ID = "gemini-2.0-flash-exp"
-# MODEL_ID = "gemini-exp-1206"
+MODEL_ID = "gemini-2.0-flash"
+#MODEL_ID = "gemini-2.0-pro-exp-02-05"
 # MODEL_ID = "gemini-2.0-flash-thinking-exp" #Google API Alias
 # MODEL_ID = "gemini-2.0-flash-thinking-exp-1219" #VertexAI
 IMAGEN_MODEL='imagen-3.0-generate-001'
@@ -47,24 +47,28 @@ generate_content_config = types.GenerateContentConfig(
     temperature = 1,
     top_p = 0.95,
     max_output_tokens = 8192,
-    # safety_settings = [types.SafetySetting(
-    #   category="HARM_CATEGORY_HATE_SPEECH",
-    #   threshold="OFF"
-    # ),types.SafetySetting(
-    #   category="HARM_CATEGORY_DANGEROUS_CONTENT",
-    #   threshold="OFF"
-    # ),types.SafetySetting(
-    #   category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
-    #   threshold="OFF"
-    # ),types.SafetySetting(
-    #   category="HARM_CATEGORY_HARASSMENT",
-    #   threshold="OFF"
-    # )],
-    tools = tools, #Comment out if you use gemini-2.0-flash-thinking-exp
+    safety_settings = [types.SafetySetting(
+      category="HARM_CATEGORY_HATE_SPEECH",
+      threshold="OFF"
+    ),types.SafetySetting(
+      category="HARM_CATEGORY_DANGEROUS_CONTENT",
+      threshold="OFF"
+    ),types.SafetySetting(
+      category="HARM_CATEGORY_SEXUALLY_EXPLICIT",
+      threshold="OFF"
+    ),types.SafetySetting(
+      category="HARM_CATEGORY_HARASSMENT",
+      threshold="OFF"
+    )],
+    tools = tools,
+    response_modalities=["TEXT"]
   )
 
 # Initialize Google AI via API_KEY
-chat_model = genai.Client(api_key=GOOGLE_AI_KEY,  http_options={'api_version':'v1alpha'})
+# To use the thinking model you need to set your client to use the v1alpha version of the API:
+# https://ai.google.dev/gemini-api/docs/grounding?lang=python
+# chat_model = genai.Client(api_key=GOOGLE_AI_KEY,  http_options={'api_version':'v1alpha'})
+chat_model = genai.Client(api_key=GOOGLE_AI_KEY)
 
 # Initialize Vertex AI API
 # chat_model = genai.Client(
@@ -155,30 +159,89 @@ async def process_text_message(message, cleaned_text):
 from typing import Any
 import logging
 
+# def process_answer(answer: Any) -> str:
+#     """
+#     Extract the text part from the LLM response for Discord.
+
+#     Args:
+#         answer: The LLM response object.
+
+#     Returns:
+#         The response string.
+#     """
+#     try:
+#         text = answer.text.strip()
+#         return text
+
+#     except AttributeError as e:
+#         logging.error(f"Error processing LLM response: Missing 'text' attribute. Answer object type: {type(answer).__name__}")
+#         return "Error: An issue occurred while processing the LLM response."
+
+#     except Exception as e:
+#         error_type = type(e).__name__
+#         error_details = str(e)
+#         logging.exception(f"Unexpected error processing LLM response: type={error_type}, details={error_details}, Answer object type: {type(answer).__name__}")
+#         return "Error: An unexpected error has occurred. See system logs for more information."
+
 def process_answer(answer: Any) -> str:
     """
-    Extract the text part from the LLM response for Discord.
+    Extracts the text part from the LLM response for Discord.
+    This function first tries to get the text from answer.text. If that fails (e.g., due to a ValueError),
+    it then checks answer.parts for any text. If no text is found there, it looks for text in
+    answer.candidates[0].content.parts. If none of these contain meaningful text, it logs the entire
+    answer object and returns an error message.
+
+    Optionally, you can also log grounding metadata if available.
 
     Args:
         answer: The LLM response object.
 
     Returns:
-        The response string.
+        The extracted text if available, otherwise an error message.
     """
     try:
-        text = answer.text.strip()
-        return text
+        # 1. Try to get text from answer.text
+        try:
+            text = answer.text.strip()
+            return text
+        except ValueError:
+            # If answer.text raises a ValueError, move on to the next extraction method.
+            pass
+
+        # 2. Extract text from answer.parts if available.
+        if hasattr(answer, 'parts') and answer.parts:
+            text_parts = [part.text for part in answer.parts if hasattr(part, 'text') and part.text]
+            if text_parts:
+                return "\n".join(text_parts).strip()
+
+        # 3. If candidates are present, extract text from the first candidate's content.parts.
+        if hasattr(answer, 'candidates') and answer.candidates:
+            candidate = answer.candidates[0]
+            if hasattr(candidate, 'content') and candidate.content and hasattr(candidate.content, 'parts'):
+                candidate_text_parts = [part.text for part in candidate.content.parts if hasattr(part, 'text') and part.text]
+                if candidate_text_parts:
+                    return "\n".join(candidate_text_parts).strip()
+            
+            # Optionally, log the grounding metadata if available.
+            if hasattr(candidate, 'groundingMetadata') and candidate.groundingMetadata:
+                logging.info("Grounding metadata (rendered content): %s", candidate.groundingMetadata.searchEntryPoint.renderedContent)
+
+        # If no meaningful text is found, log the entire answer object.
+        logging.error("No text found in Gemini response. Answer content: %s", answer)
+        return "Error: No text found in Gemini response."
 
     except AttributeError as e:
-        logging.error(f"Error processing LLM response: Missing 'text' attribute. Answer object type: {type(answer).__name__}")
+        logging.error("Error processing LLM response: Missing attribute. Answer object type: %s, Answer content: %s",
+                    type(answer).__name__, answer)
         return "Error: An issue occurred while processing the LLM response."
 
     except Exception as e:
         error_type = type(e).__name__
         error_details = str(e)
-        logging.exception(f"Unexpected error processing LLM response: type={error_type}, details={error_details}, Answer object type: {type(answer).__name__}")
+        logging.exception("Unexpected error processing LLM response: type=%s, details=%s, Answer object type: %s, Answer content: %s",
+                        error_type, error_details, type(answer).__name__, answer)
         return "Error: An unexpected error has occurred. See system logs for more information."
-    
+
 ##################
        
 async def generate_response_with_text(message, cleaned_text):
