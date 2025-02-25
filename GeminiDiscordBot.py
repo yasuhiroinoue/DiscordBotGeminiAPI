@@ -10,6 +10,7 @@ from discord.ext import commands
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
+import datetime  # 追加: タイムスタンプ用
 
 # MODEL_ID = "gemini-2.0-flash"
 MODEL_ID = "gemini-2.0-pro-exp-02-05"
@@ -87,6 +88,7 @@ async def on_ready():
     print(f'Gemini Bot Logged in as {bot.user}')
     print("----------------------------------------")
 
+
 @bot.event
 async def on_message(message):
     """Handle incoming messages."""
@@ -100,17 +102,20 @@ async def on_message(message):
 
     if message.content.startswith('!img'):
         await bot.process_commands(message)
-        # For debug
-        # print(message.content)
-        # print(clean_discord_message(message.content))
-        #
     elif bot.user.mentioned_in(message) or isinstance(message.channel, discord.DMChannel):
         cleaned_text = clean_discord_message(message.content)
+        
+        # 追加: !save コマンドの検出
+        save_to_file = False
+        if cleaned_text.startswith("!save "):
+            save_to_file = True
+            cleaned_text = cleaned_text.replace("!save ", "", 1)
+        
         async with message.channel.typing():
             if message.attachments:
-                await process_attachments(message, cleaned_text)
+                await process_attachments(message, cleaned_text, save_to_file)
             else:
-                await process_text_message(message, cleaned_text)
+                await process_text_message(message, cleaned_text, save_to_file)
 
 
 def get_mime_type_from_bytes(byte_data):
@@ -122,7 +127,8 @@ def get_mime_type_from_bytes(byte_data):
         mime_type = 'text/plain'
     return mime_type
 
-async def process_attachments(message, cleaned_text):
+
+async def process_attachments(message, cleaned_text, save_to_file=False):
     """Process message attachments and generate responses."""
     for attachment in message.attachments:
         await message.add_reaction('📄')
@@ -135,7 +141,12 @@ async def process_attachments(message, cleaned_text):
                     file_data = await resp.read()
                     mime_type = get_mime_type_from_bytes(file_data)
                     response_text = await generate_response_with_file_and_text(message, file_data, cleaned_text, mime_type)
-                    await split_and_send_messages(message, response_text, MAX_DISCORD_LENGTH)
+                    
+                    # 追加: !save コマンド処理
+                    if save_to_file:
+                        await save_response_as_file(message, response_text)
+                    else:
+                        await split_and_send_messages(message, response_text, MAX_DISCORD_LENGTH)
                     return
         except aiohttp.ClientError as e:
             await message.channel.send(f'Failed to download the file: {e}')
@@ -143,7 +154,8 @@ async def process_attachments(message, cleaned_text):
             await message.channel.send(f'An unexpected error occurred: {e}')
 
 
-async def process_text_message(message, cleaned_text):
+
+async def process_text_message(message, cleaned_text, save_to_file=False):
     """Processes a text message and generates a response using a chat model."""
     if re.search(r'^RESET$', cleaned_text, re.IGNORECASE):
         chat.pop(message.author.id, None)
@@ -152,36 +164,41 @@ async def process_text_message(message, cleaned_text):
 
     await message.add_reaction('💬')
     response_text = await generate_response_with_text(message, cleaned_text)
+    
+    # 追加: !save コマンド処理
+    if save_to_file:
+        await save_response_as_file(message, response_text)
+    else:
+        await split_and_send_messages(message, response_text, MAX_DISCORD_LENGTH)
 
-    await split_and_send_messages(message, response_text, MAX_DISCORD_LENGTH)
 
+async def save_response_as_file(message, response_text):
+    """
+    Saves the response as a markdown file and sends it to the Discord channel.
+    """
+    # タイムスタンプ付きのファイル名を生成
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"gemini_response_{timestamp}.md"
+    
+    # 応答テキストを持つファイルオブジェクトを作成
+    file = discord.File(io.StringIO(response_text), filename=filename)
+    
+    # ファイルを添付したメッセージを送信
+    await message.channel.send(f"💾 Here's your response as a file:", file=file)
+    
+    # 最初の数行のプレビュー（オプション）
+    preview_lines = response_text.split('\n')[:5]  # 最初の5行
+    preview = '\n'.join(preview_lines)
+    if len(preview_lines) >= 5:
+        preview += "\n..."
+    
+    if preview.strip():  # 内容があればプレビューを送信
+        await message.channel.send(f"📝 Preview:\n```\n{preview}\n```")
+
+        
 #################
 from typing import Any
 import logging
-
-# def process_answer(answer: Any) -> str:
-#     """
-#     Extract the text part from the LLM response for Discord.
-
-#     Args:
-#         answer: The LLM response object.
-
-#     Returns:
-#         The response string.
-#     """
-#     try:
-#         text = answer.text.strip()
-#         return text
-
-#     except AttributeError as e:
-#         logging.error(f"Error processing LLM response: Missing 'text' attribute. Answer object type: {type(answer).__name__}")
-#         return "Error: An issue occurred while processing the LLM response."
-
-#     except Exception as e:
-#         error_type = type(e).__name__
-#         error_details = str(e)
-#         logging.exception(f"Unexpected error processing LLM response: type={error_type}, details={error_details}, Answer object type: {type(answer).__name__}")
-#         return "Error: An unexpected error has occurred. See system logs for more information."
 
 def process_answer(answer: Any) -> str:
     """
