@@ -13,8 +13,8 @@ from google.genai import types
 import datetime  # 追加: タイムスタンプ用
 
 # MODEL_ID = "gemini-2.0-flash"
-MODEL_ID = "gemini-2.0-pro-exp-02-05"
-# MODEL_ID = "gemini-2.0-flash-thinking-exp" #Google API Alias
+#MODEL_ID = "gemini-2.0-pro-exp-02-05"
+MODEL_ID = "gemini-2.5-pro-exp-03-25" #Google API Alias
 # MODEL_ID = "gemini-2.0-flash-thinking-exp-1219" #VertexAI
 IMAGEN_MODEL='imagen-3.0-generate-002'
 
@@ -26,11 +26,11 @@ chat = {}
 load_dotenv()
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 # Google AI (API KEY)
-# GOOGLE_AI_KEY = os.getenv("GOOGLE_AI_KEY")
+GOOGLE_AI_KEY = os.getenv("GOOGLE_AI_KEY")
 
 # VertexAI
-GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
-GCP_REGION = os.getenv("GCP_REGION")
+#GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
+#GCP_REGION = os.getenv("GCP_REGION")
 
 # The maximum number of characters per Discord message
 MAX_DISCORD_LENGTH = 2000
@@ -47,7 +47,7 @@ tools = [
 generate_content_config = types.GenerateContentConfig(
     temperature = 1,
     top_p = 0.95,
-    max_output_tokens = 8192,
+    max_output_tokens = 65536,
     safety_settings = [types.SafetySetting(
       category="HARM_CATEGORY_HATE_SPEECH",
       threshold="OFF"
@@ -68,13 +68,13 @@ generate_content_config = types.GenerateContentConfig(
 # Initialize Google AI via API_KEY
 # To use the thinking model you need to set your client to use the v1alpha version of the API:
 # https://ai.google.dev/gemini-api/docs/grounding?lang=python
-# chat_model = genai.Client(api_key=GOOGLE_AI_KEY,  http_options={'api_version':'v1alpha'})
-# chat_model = genai.Client(api_key=GOOGLE_AI_KEY)
+#chat_model = genai.Client(api_key=GOOGLE_AI_KEY,  http_options={'api_version':'v1alpha'})
+chat_model = genai.Client(api_key=GOOGLE_AI_KEY)
 
 # Initialize Vertex AI API
-chat_model = genai.Client(
-    vertexai=True, project=GCP_PROJECT_ID, location=GCP_REGION
-)
+#chat_model = genai.Client(
+#    vertexai=True, project=GCP_PROJECT_ID, location=GCP_REGION
+#)
 
 # Initialize Discord bot
 intents = discord.Intents.default()
@@ -100,7 +100,7 @@ async def on_message(message):
         await message.channel.send(f'This is {bot.user}')
         return
 
-    if message.content.startswith('!img'):
+    if message.content.startswith('!img') or message.content.startswith('!gra'):
         await bot.process_commands(message)
     elif bot.user.mentioned_in(message) or isinstance(message.channel, discord.DMChannel):
         cleaned_text = clean_discord_message(message.content)
@@ -420,6 +420,252 @@ async def generate(ctx, *, args):
     except Exception as e:
         await ctx.send(f"An error occurred: {str(e)}")
 
-#On Message Function
+# グラフィックレコーディング用のテンプレート
+GRAPHIC_RECORDING_TEMPLATE = """
+# グラフィックレコーディング風インフォグラフィック変換プロンプト
+## 目的
+  以下の内容を、超一流デザイナーが作成したような、日本語で完璧なグラフィックレコーディング風のHTMLインフォグラフィックに変換してください。情報設計とビジュアルデザインの両面で最高水準を目指します
+  手書き風の図形やアイコンを活用して内容を視覚的に表現します。
+## デザイン仕様
+### 1. カラースキーム
+```
+  <palette>
+  <color name='ファッション-1' rgb='593C47' r='89' g='59' b='70' />
+  <color name='ファッション-2' rgb='F2E63D' r='242' g='230' b='60' />
+  <color name='ファッション-3' rgb='F2C53D' r='242' g='196' b='60' />
+  <color name='ファッション-4' rgb='F25C05' r='242' g='91' b='4' />
+  <color name='ファッション-5' rgb='F24405' r='242' g='68' b='4' />
+  </palette>
+```
+### 2. グラフィックレコーディング要素
+- 左上から右へ、上から下へと情報を順次配置
+- 日本語の手書き風フォントの使用（Yomogi, Zen Kurenaido, Kaisei Decol）
+- 手描き風の囲み線、矢印、バナー、吹き出し
+- テキストと視覚要素（アイコン、シンプルな図形）の組み合わせ
+- キーワードの強調（色付き下線、マーカー効果）
+- 関連する概念を線や矢印で接続
+- 絵文字やアイコンを効果的に配置（✏️📌📝🔍📊など）
+### 3. タイポグラフィ
+  - タイトル：32px、グラデーション効果、太字
+  - サブタイトル：16px、#475569
+  - セクション見出し：18px、#1e40af、アイコン付き
+  - 本文：14px、#334155、行間1.4
+  - フォント指定：
+    ```html
+    <style>
+    
+@import
+ url('https://fonts.googleapis.com/css2?family=Kaisei+Decol&family=Yomogi&family=Zen+Kurenaido&display=swap');
+    </style>
+    ```
+### 4. レイアウト
+  - ヘッダー：左揃えタイトル＋右揃え日付/出典
+  - 3カラム構成：左側33%、中央33%、右側33%
+  - カード型コンポーネント：白背景、角丸12px、微細シャドウ
+  - セクション間の適切な余白と階層構造
+  - 適切にグラスモーフィズムを活用
+  - 横幅は100%にして
+## グラフィックレコーディング表現技法
+- テキストと視覚要素のバランスを重視
+- キーワードを囲み線や色で強調
+- 簡易的なアイコンや図形で概念を視覚化
+- 数値データは簡潔なグラフや図表で表現
+- 接続線や矢印で情報間の関係性を明示
+- 余白を効果的に活用して視認性を確保
+## 全体的な指針
+- 読み手が自然に視線を移動できる配置
+- 情報の階層と関連性を視覚的に明確化
+- 手書き風の要素で親しみやすさを演出
+- 視覚的な記憶に残るデザイン
+- フッターに出典情報を明記
+"""
+
+# !graコマンドの実装
+@bot.command(name='gra')
+async def graphic_recording(ctx, *, prompt=""):
+    """Create a graphic recording from PDF or text prompt."""
+    await ctx.message.add_reaction('📊')  # リアクションを追加してコマンド受付を示す
+    
+    async with ctx.typing():
+        if ctx.message.attachments:
+            await process_graphic_recording_with_file(ctx, prompt)
+        else:
+            await process_graphic_recording(ctx, prompt)
+
+async def process_graphic_recording_with_file(ctx, prompt):
+    """PDF添付ありのグラフィックレコーディング処理"""
+    for attachment in ctx.message.attachments:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(attachment.url) as resp:
+                    if resp.status != 200:
+                        await ctx.send('Unable to download the file.')
+                        return
+                    file_data = await resp.read()
+                    mime_type = get_mime_type_from_bytes(file_data)
+                    
+                    # グラフィックレコーディングのプロンプトを作成
+                    enhanced_prompt = create_graphic_recording_prompt(prompt, with_file=True)
+                    
+                    # Geminiに送信して結果を取得
+                    response_text = await generate_response_with_file_and_text(
+                        ctx.message, file_data, enhanced_prompt, mime_type
+                    )
+                    
+                    # HTML抽出とレスポンス処理
+                    await process_graphic_recording_response(ctx, response_text)
+                    return
+        except Exception as e:
+            await ctx.send(f'An error occurred: {e}')
+
+async def process_graphic_recording(ctx, prompt):
+    """テキストのみのグラフィックレコーディング処理"""
+    try:
+        # グラフィックレコーディングのプロンプトを作成
+        enhanced_prompt = create_graphic_recording_prompt(prompt, with_file=False)
+        
+        # Geminiに送信して結果を取得
+        response_text = await generate_response_with_text(ctx.message, enhanced_prompt)
+        
+        # HTML抽出とレスポンス処理
+        await process_graphic_recording_response(ctx, response_text)
+    except Exception as e:
+        await ctx.send(f'An error occurred: {e}')
+
+def create_graphic_recording_prompt(user_prompt, with_file=False):
+    """グラフィックレコーディング用のプロンプトを作成"""
+    base_prompt = GRAPHIC_RECORDING_TEMPLATE
+
+    if with_file:
+        file_instruction = f"""
+## 変換する文章/記事
+添付されたPDFファイルを分析し、その内容を理解してください。以下のプロンプトに基づいて、PDFの内容をグラフィックレコーディングとしてまとめてください:
+{user_prompt}
+
+出力形式：完全なHTMLコードで返してください。```html ... ```の形式で返してください。HTMLにはすべてのスタイルを含め、外部リソースへの依存がないようにしてください。
+"""
+        return base_prompt + file_instruction
+    else:
+        text_instruction = f"""
+## 変換する文章/記事
+以下のプロンプトに基づいて、グラフィックレコーディングを作成してください:
+{user_prompt}
+これまでの会話履歴も考慮に入れてください。
+
+出力形式：完全なHTMLコードで返してください。```html ... ```の形式で返してください。HTMLにはすべてのスタイルを含め、外部リソースへの依存がないようにしてください。
+"""
+        return base_prompt + text_instruction
+
+async def process_graphic_recording_response(ctx, response_text):
+    """HTMLレスポンスを処理してDiscordに送信"""
+    try:
+        # HTMLコードを抽出
+        html_match = re.search(r'```html\s*([\s\S]*?)\s*```', response_text)
+        if not html_match:
+            # HTML形式でない場合は通常のテキストとして送信
+            await ctx.send("グラフィックレコーディングの生成に失敗しました。HTMLコードが見つかりません。")
+            await split_and_send_messages(ctx, response_text, MAX_DISCORD_LENGTH)
+            return
+            
+        html_code = html_match.group(1)
+        
+        # HTMLをファイルとして保存
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"graphic_recording_{timestamp}.html"
+        
+        # HTMLファイルを作成して送信
+        html_file = discord.File(io.StringIO(html_code), filename=filename)
+        await ctx.send(f"🎨 グラフィックレコーディングが完成しました！", file=html_file)
+        
+        # Embedとしても表示
+        await send_graphic_recording_preview(ctx, html_code, response_text)
+        
+    except Exception as e:
+        await ctx.send(f"HTMLの処理中にエラーが発生しました: {e}")
+        await split_and_send_messages(ctx, response_text, MAX_DISCORD_LENGTH)
+
+async def send_graphic_recording_preview(ctx, html_code, full_response):
+    """グラフィックレコーディングのプレビューをEmbed形式で表示"""
+    try:
+        # タイトルを抽出
+        title_match = re.search(r'<h1[^>]*>(.*?)<\/h1>', html_code, re.DOTALL)
+        title = title_match.group(1) if title_match else "グラフィックレコーディング"
+        title = re.sub(r'<[^>]+>', '', title)  # HTMLタグを削除
+        
+        # 説明を抽出（最初の段落またはdivの内容）
+        desc_match = re.search(r'<p[^>]*>(.*?)<\/p>|<div[^>]*>(.*?)<\/div>', html_code, re.DOTALL)
+        description = desc_match.group(1) if desc_match and desc_match.group(1) else desc_match.group(2) if desc_match else "内容のプレビュー"
+        
+        # HTML要素のタグを削除してプレーンテキスト化
+        description = re.sub(r'<[^>]+>', '', description)
+        # Discordのembedの説明は最大4096文字まで
+        description = description[:2000] + "..." if len(description) > 2000 else description
+        
+        # Embedを作成
+        embed = discord.Embed(
+            title=title[:256],  # タイトルは256文字まで
+            description=description,
+            color=0xF25C05  # テンプレートの「ファッション-4」カラー
+        )
+        
+        # キーポイントを抽出（リスト要素など）
+        list_items = re.findall(r'<li[^>]*>(.*?)<\/li>', html_code, re.DOTALL)
+        if list_items:
+            # 制限内に収まるようにキーポイントを取得
+            key_points = []
+            points_text = ""
+            for item in list_items:
+                plain_text = re.sub(r'<[^>]+>', '', item).strip()
+                if plain_text:
+                    new_point = f"• {plain_text}\n"
+                    # フィールド値の制限は1024文字
+                    if len(points_text + new_point) > 1000:  # 余裕を持たせる
+                        points_text += "..."
+                        break
+                    points_text += new_point
+                    key_points.append(plain_text)
+            
+            if points_text:
+                embed.add_field(
+                    name="🔑 キーポイント",
+                    value=points_text[:1024],  # 確実に制限内に収める
+                    inline=False
+                )
+        
+        # 見出しを抽出
+        headings = re.findall(r'<h[2-4][^>]*>(.*?)<\/h[2-4]>', html_code, re.DOTALL)
+        if headings:
+            # 制限内に収まるように見出しを取得
+            headings_text = ""
+            processed_headings = []
+            
+            for h in headings:
+                plain_heading = re.sub(r'<[^>]+>', '', h).strip()
+                if plain_heading:
+                    new_heading = f"📌 {plain_heading}\n"
+                    # フィールド値の制限は1024文字
+                    if len(headings_text + new_heading) > 1000:  # 余裕を持たせる
+                        headings_text += "..."
+                        break
+                    headings_text += new_heading
+                    processed_headings.append(plain_heading)
+            
+            if headings_text:
+                embed.add_field(
+                    name="📋 セクション",
+                    value=headings_text[:1024],  # 確実に制限内に収める
+                    inline=False
+                )
+        
+        # フッター
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        embed.set_footer(text=f"Graphic Recording | {timestamp}")
+        
+        await ctx.send(embed=embed)
+        
+    except Exception as e:
+        await ctx.send(f"プレビューの作成中にエラーが発生しました: {str(e)}")
+        # HTML全体をプレビューとして送信せず、エラーのみを表示
+
 # Run the bot
 bot.run(DISCORD_BOT_TOKEN)
