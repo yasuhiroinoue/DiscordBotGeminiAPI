@@ -6,16 +6,16 @@ import io
 # import asyncio
 import magic
 import discord
+import tempfile
+import urllib.parse
 from discord.ext import commands
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 import datetime  # 追加: タイムスタンプ用
+import logging   # 追加: loggingモジュール
 
-# MODEL_ID = "gemini-2.0-flash"
-#MODEL_ID = "gemini-2.0-pro-exp-02-05"
-MODEL_ID = "gemini-2.5-pro-exp-03-25" #Google API Alias
-# MODEL_ID = "gemini-2.0-flash-thinking-exp-1219" #VertexAI
+MODEL_ID = "gemini-2.5-pro-preview-03-25"
 IMAGEN_MODEL='imagen-3.0-generate-002'
 
 
@@ -26,18 +26,62 @@ chat = {}
 load_dotenv()
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 # Google AI (API KEY)
-GOOGLE_AI_KEY = os.getenv("GOOGLE_AI_KEY")
+#GOOGLE_AI_KEY = os.getenv("GOOGLE_AI_KEY")
 
 # VertexAI
-#GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
-#GCP_REGION = os.getenv("GCP_REGION")
+GCP_PROJECT_ID = os.getenv("GCP_PROJECT_ID")
+GCP_REGION = os.getenv("GCP_REGION")
 
 # The maximum number of characters per Discord message
 MAX_DISCORD_LENGTH = 2000
 
 # Load the environment variable for enabling/disabling commands
 IMG_COMMANDS_ENABLED = os.getenv('IMG_COMMANDS_ENABLED', 'False').lower() == 'true'
-print(IMG_COMMANDS_ENABLED)
+print(f"Image commands enabled: {IMG_COMMANDS_ENABLED}")
+
+# デバッグ設定
+DEBUG_SAVE_CLOUD_FILES = os.getenv('DEBUG_SAVE_CLOUD_FILES', 'False').lower() == 'true'
+DEBUG_FILES_DIR = os.getenv('DEBUG_FILES_DIR', 'debug_files')
+# ユーザーIDをログに記録するかどうかの設定（デバッグ用）
+DEBUG_LOG_USER_IDS = os.getenv('DEBUG_LOG_USER_IDS', 'False').lower() == 'true'
+
+# デバッグディレクトリの作成（必要な場合）
+if DEBUG_SAVE_CLOUD_FILES and not os.path.exists(DEBUG_FILES_DIR):
+    os.makedirs(DEBUG_FILES_DIR)
+    print(f"Created debug files directory: {DEBUG_FILES_DIR}")
+
+if DEBUG_SAVE_CLOUD_FILES:
+    print("Debug mode: Cloud files will be saved locally")
+
+if DEBUG_LOG_USER_IDS:
+    print("Debug mode: User ID logging is enabled")
+else:
+    print("Production mode: User ID logging is disabled")
+
+# Load allowed user IDs from environment variable (comma-separated)
+ALLOWED_USER_IDS_STR = os.getenv("ALLOWED_USER_IDS", "")
+ALLOWED_USER_IDS = set(int(uid.strip()) for uid in ALLOWED_USER_IDS_STR.split(',') if uid.strip().isdigit())
+if not ALLOWED_USER_IDS:
+    print("Warning: No ALLOWED_USER_IDS set. Bot will respond to everyone.")
+else:
+    print(f"Allowed user IDs: {ALLOWED_USER_IDS}")
+
+# Configure logging for user interactions
+log_formatter = logging.Formatter('%(asctime)s - %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+log_handler = logging.FileHandler('bot_usage.log', encoding='utf-8') # Log file name
+log_handler.setFormatter(log_formatter)
+
+usage_logger = logging.getLogger('bot_usage')
+usage_logger.setLevel(logging.INFO)
+usage_logger.addHandler(log_handler)
+# Avoid propagating to root logger to prevent duplicate console logs if root is configured
+usage_logger.propagate = False
+
+# 通知メッセージの更新
+if DEBUG_LOG_USER_IDS:
+    print("Logging user interactions with IDs to bot_usage.log")
+else:
+    print("Logging user interactions without user IDs to bot_usage.log")
 
 # Tool to support Google Search in Model
 tools = [
@@ -69,12 +113,12 @@ generate_content_config = types.GenerateContentConfig(
 # To use the thinking model you need to set your client to use the v1alpha version of the API:
 # https://ai.google.dev/gemini-api/docs/grounding?lang=python
 #chat_model = genai.Client(api_key=GOOGLE_AI_KEY,  http_options={'api_version':'v1alpha'})
-chat_model = genai.Client(api_key=GOOGLE_AI_KEY)
+#chat_model = genai.Client(api_key=GOOGLE_AI_KEY)
 
 # Initialize Vertex AI API
-#chat_model = genai.Client(
-#    vertexai=True, project=GCP_PROJECT_ID, location=GCP_REGION
-#)
+chat_model = genai.Client(
+    vertexai=True, project=GCP_PROJECT_ID, location=GCP_REGION
+)
 
 # Initialize Discord bot
 intents = discord.Intents.default()
@@ -95,24 +139,85 @@ async def on_message(message):
     if message.author == bot.user:
         return
 
+    # Check if the author is in the allowed list (if the list is defined)
+    if ALLOWED_USER_IDS and message.author.id not in ALLOWED_USER_IDS:
+        print(f"Ignoring message from unauthorized user: {message.author.name} ({message.author.id})")
+        return # Ignore messages from non-allowed users
+
+    # Log the interaction only for DMs and only if debugging is enabled
+    if isinstance(message.channel, discord.DMChannel) and DEBUG_LOG_USER_IDS:
+        channel_info = f"DM ({message.channel.id})"
+        usage_logger.info(f"Processing message from User: {message.author.name} (ID: {message.author.id}) in {channel_info}")
+
     # Respond when mentioned or in DMs
     if message.mention_everyone:
         await message.channel.send(f'This is {bot.user}')
         return
 
-    if message.content.startswith('!img') or message.content.startswith('!gra'):
-        await bot.process_commands(message)
-    elif bot.user.mentioned_in(message) or isinstance(message.channel, discord.DMChannel):
-        cleaned_text = clean_discord_message(message.content)
+    # bot.user.mentioned_in(message) or isinstance(message.channel, discord.DMChannel):
+    if bot.user.mentioned_in(message) or isinstance(message.channel, discord.DMChannel):
+        # メッセージからクラウドストレージリンクを抽出
+        original_content = message.content
+        cleaned_text, cloud_links = extract_cloud_links(clean_discord_message(original_content))
         
-        # 追加: !save コマンドの検出
+        # コマンド検出
         save_to_file = False
+        img_command = False
+        gra_command = False
+        
+        # !save コマンドの検出
         if cleaned_text.startswith("!save "):
             save_to_file = True
             cleaned_text = cleaned_text.replace("!save ", "", 1)
         
+        # !img コマンドの検出
+        elif cleaned_text.startswith("!img "):
+            if not IMG_COMMANDS_ENABLED:
+                await message.channel.send("The image generation feature is currently disabled")
+                return
+            img_command = True
+            prompt_text = cleaned_text.replace("!img ", "", 1)
+            
+        # !gra コマンドの検出
+        elif cleaned_text.startswith("!gra "):
+            gra_command = True
+            prompt_text = cleaned_text.replace("!gra ", "", 1)
+        
         async with message.channel.typing():
-            if message.attachments:
+            # クラウドストレージリンクの処理（存在する場合）
+            if cloud_links:
+                try:
+                    # 最初のリンクのみ処理（複数ある場合は最初のみ）
+                    file_data, mime_type = await download_from_cloud_storage(message, cloud_links[0])
+                    
+                    if gra_command:
+                        # !gra コマンドの場合はグラフィックレコーディング処理
+                        await process_graphic_recording_with_cloud_file(message, prompt_text, file_data, mime_type)
+                    else:
+                        # 通常処理
+                        await process_cloud_file(message, cleaned_text, file_data, mime_type, save_to_file)
+                except Exception as e:
+                    await message.channel.send(f"Failed to process cloud storage link: {str(e)}")
+                    # エラーがあっても通常のフローに続行しない
+                    return
+            
+            # 通常の処理フロー
+            elif img_command:
+                await message.add_reaction('🎨')
+                # !img コマンドの処理
+                prompt_text, aspect_ratio = await parse_args(prompt_text)
+                await message.channel.send(f"Prompt: {prompt_text}")
+                await handle_generation(message, prompt_text, aspect_ratio)
+                
+            elif gra_command:
+                await message.add_reaction('📊')
+                # !gra コマンドの処理
+                if message.attachments:
+                    await process_graphic_recording_with_file(message, prompt_text)
+                else:
+                    await process_graphic_recording(message, prompt_text)
+                
+            elif message.attachments:
                 await process_attachments(message, cleaned_text, save_to_file)
             else:
                 await process_text_message(message, cleaned_text, save_to_file)
@@ -310,6 +415,294 @@ def clean_discord_message(input_string):
     bracket_pattern = re.compile(r'<[^>]+>')
     return bracket_pattern.sub('', input_string)
 
+def save_debug_file(file_data, service_name, original_url, mime_type):
+    """
+    デバッグ用にダウンロードしたファイルをローカルに保存する
+    
+    Args:
+        file_data (bytes): ファイルデータ
+        service_name (str): サービス名（例: "dropbox", "gdrive", "onedrive"）
+        original_url (str): 元のURL（ファイル名に使用）
+        mime_type (str): ファイルのMIMEタイプ
+        
+    Returns:
+        str or None: 保存したファイルのパス、または保存に失敗した場合はNone
+    """
+    if not DEBUG_SAVE_CLOUD_FILES:
+        return None
+    
+    # URLからファイル名の推測を試みる
+    url_filename = os.path.basename(urllib.parse.urlparse(original_url).path)
+    if not url_filename or url_filename == '':
+        # URLからファイル名を取得できない場合はタイムスタンプのみ
+        url_filename = ""
+    
+    # タイムスタンプを生成
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    # MIMEタイプから拡張子を推測
+    extension = ""
+    if '/' in mime_type:
+        main_type, sub_type = mime_type.split('/', 1)
+        if sub_type not in ['octet-stream', 'binary']:
+            extension = f".{sub_type}"
+        elif main_type == 'application':
+            # 一般的なアプリケーションタイプの場合
+            if 'pdf' in sub_type:
+                extension = '.pdf'
+            elif 'msword' in sub_type:
+                extension = '.doc'
+            elif 'vnd.ms-excel' in sub_type:
+                extension = '.xls'
+            elif 'vnd.ms-powerpoint' in sub_type:
+                extension = '.ppt'
+    
+    # 元のURLに拡張子が含まれている場合、それを使用
+    if '.' in url_filename:
+        orig_extension = url_filename.split('.')[-1]
+        if orig_extension and len(orig_extension) <= 5:  # 妥当な拡張子の長さ
+            extension = f".{orig_extension}"
+    
+    # ファイル名の作成
+    if url_filename and '.' in url_filename:
+        # 元のファイル名を維持しつつタイムスタンプを追加（拡張子は元のものを使用）
+        base_name = url_filename.rsplit('.', 1)[0]
+        filename = f"{service_name}_{timestamp}_{base_name}{extension}"
+    elif url_filename:
+        # 元のファイル名を維持しつつタイムスタンプを追加
+        filename = f"{service_name}_{timestamp}_{url_filename}{extension}"
+    else:
+        # URLからファイル名を取得できない場合
+        filename = f"{service_name}_{timestamp}{extension}"
+    
+    # 特殊文字を置換
+    filename = re.sub(r'[^\w\-\.]', '_', filename)
+    
+    # ファイルパスを生成
+    filepath = os.path.join(DEBUG_FILES_DIR, filename)
+    
+    # ファイルを保存
+    try:
+        with open(filepath, 'wb') as f:
+            f.write(file_data)
+        logging.info(f"DEBUG: Saved {service_name} file to {filepath} ({len(file_data)} bytes, {mime_type})")
+        return filepath
+    except Exception as e:
+        logging.error(f"DEBUG: Failed to save {service_name} file: {str(e)}")
+        return None
+
+def extract_cloud_links(message_content):
+    """
+    メッセージからクラウドストレージリンクを抽出し、残りのテキストとリンクのリストを返す
+    
+    Args:
+        message_content (str): 処理するメッセージ内容
+        
+    Returns:
+        tuple: (リンクを除去したテキスト, 検出されたクラウドストレージリンクのリスト)
+    """
+    # 各クラウドストレージのURLパターン
+    dropbox_pattern = r'https?://(?:www\.)?dropbox\.com/\S+'
+    gdrive_pattern = r'https?://(?:www\.)?drive\.google\.com/\S+'
+    
+    # すべてのパターンを結合 (OneDriveパターンを削除)
+    cloud_pattern = f'({dropbox_pattern}|{gdrive_pattern})'
+    
+    # リンクを検索
+    links = re.findall(cloud_pattern, message_content)
+    
+    # リンクを除去したテキストを作成
+    cleaned_text = re.sub(cloud_pattern, '', message_content).strip()
+    
+    return cleaned_text, links
+
+async def download_from_cloud_storage(message, url):
+    """
+    クラウドストレージURLからファイルをダウンロードする
+    
+    Args:
+        message (discord.Message): Discordメッセージオブジェクト
+        url (str): クラウドストレージURL
+        
+    Returns:
+        tuple: (ダウンロードしたファイルデータのバイト列, MIMEタイプ文字列)
+    """
+    # URLからサービスタイプを判別
+    if 'dropbox.com' in url:
+        return await download_from_dropbox(message, url)
+    elif 'drive.google.com' in url:
+        return await download_from_google_drive(message, url)
+    elif '1drv.ms' in url or 'onedrive.live.com' in url or 'sharepoint.com' in url or 'office.com' in url or 'microsoft.com' in url:
+        await message.add_reaction('❌')
+        raise ValueError("OneDriveリンクはサポートされていません。DropboxまたはGoogle Driveをご利用ください。")
+    else:
+        await message.add_reaction('❌')
+        raise ValueError(f"サポートされていないクラウドストレージURL: {url}\n現在サポートしているのはDropboxとGoogle Driveのみです。")
+
+async def download_from_dropbox(message, url):
+    """
+    Dropboxリンクからファイルをダウンロードする
+    
+    Args:
+        message (discord.Message): Discordメッセージオブジェクト
+        url (str): DropboxのURL
+        
+    Returns:
+        tuple: (ダウンロードしたファイルデータのバイト列, MIMEタイプ文字列)
+    """
+    # DropboxのURLを直接ダウンロード可能なURLに変換
+    # 公開リンクの場合： https://www.dropbox.com/s/xxxx/file.pdf?dl=0 → https://www.dropbox.com/s/xxxx/file.pdf?dl=1
+    download_url = url.replace('?dl=0', '?dl=1')
+    if '?dl=' not in download_url:
+        download_url = f"{download_url}{'&' if '?' in download_url else '?'}dl=1"
+    
+    try:
+        async with message.channel.typing():
+            await message.add_reaction('☁️')  # クラウド処理中を示すリアクション
+            
+            # ファイルをダウンロード
+            async with aiohttp.ClientSession() as session:
+                async with session.get(download_url) as resp:
+                    if resp.status != 200:
+                        await message.add_reaction('❌')
+                        raise ValueError(f"Failed to download from Dropbox. Status: {resp.status}")
+                    
+                    file_data = await resp.read()
+                    mime_type = get_mime_type_from_bytes(file_data)
+                    
+                    # デバッグモードの場合、ファイルをローカルに保存
+                    if DEBUG_SAVE_CLOUD_FILES:
+                        debug_path = save_debug_file(file_data, "dropbox", url, mime_type)
+                        if debug_path:
+                            await message.add_reaction('💾')  # 保存成功を示すリアクション
+                    
+                    # ダウンロード完了のリアクション
+                    await message.add_reaction('✅')
+                    return file_data, mime_type
+    except Exception as e:
+        await message.add_reaction('❌')
+        raise ValueError(f"Error downloading from Dropbox: {str(e)}")
+
+async def download_from_google_drive(message, url):
+    """
+    Google Driveリンクからファイルをダウンロードする
+    
+    Args:
+        message (discord.Message): Discordメッセージオブジェクト
+        url (str): Google DriveのURL
+        
+    Returns:
+        tuple: (ダウンロードしたファイルデータのバイト列, MIMEタイプ文字列)
+    """
+    try:
+        async with message.channel.typing():
+            await message.add_reaction('☁️')  # クラウド処理中を示すリアクション
+            
+            # Google DriveのIDを抽出
+            file_id = None
+            if '/file/d/' in url:
+                file_id = url.split('/file/d/')[1].split('/')[0]
+            elif 'id=' in url:
+                file_id = url.split('id=')[1].split('&')[0]
+            else:
+                await message.add_reaction('❌')
+                raise ValueError(f"Unable to extract Google Drive file ID from URL: {url}")
+            
+            # 直接ダウンロードURLを構築
+            download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
+            
+            # ファイルをダウンロード
+            async with aiohttp.ClientSession() as session:
+                async with session.get(download_url) as resp:
+                    if resp.status != 200:
+                        await message.add_reaction('❌')
+                        raise ValueError(f"Failed to download from Google Drive. Status: {resp.status}")
+                    
+                    # Cookieをチェックして大きなファイルの確認ページが返されたかどうかを確認
+                    if 'Content-Disposition' not in resp.headers:
+                        # 大きなファイルの場合は確認トークンが必要
+                        body = await resp.text()
+                        confirm_token = re.search(r'confirm=([0-9A-Za-z]+)', body)
+                        if confirm_token:
+                            # 確認トークンを使用して再ダウンロード
+                            confirm_url = f"https://drive.google.com/uc?export=download&id={file_id}&confirm={confirm_token.group(1)}"
+                            async with session.get(confirm_url) as confirm_resp:
+                                if confirm_resp.status != 200:
+                                    await message.add_reaction('❌')
+                                    raise ValueError(f"Failed to download large file from Google Drive. Status: {confirm_resp.status}")
+                                
+                                file_data = await confirm_resp.read()
+                        else:
+                            # 確認トークンが見つからない場合は最初のレスポンスを使用
+                            file_data = await resp.read()
+                    else:
+                        # 通常のファイルの場合
+                        file_data = await resp.read()
+                    
+                    mime_type = get_mime_type_from_bytes(file_data)
+                    
+                    # デバッグモードの場合、ファイルをローカルに保存
+                    if DEBUG_SAVE_CLOUD_FILES:
+                        debug_path = save_debug_file(file_data, "gdrive", url, mime_type)
+                        if debug_path:
+                            await message.add_reaction('💾')  # 保存成功を示すリアクション
+                    
+                    # ダウンロード完了のリアクション
+                    await message.add_reaction('✅')
+                    return file_data, mime_type
+    except Exception as e:
+        await message.add_reaction('❌')
+        raise ValueError(f"Error downloading from Google Drive: {str(e)}")
+
+
+
+async def process_cloud_file(message, cleaned_text, file_data, mime_type, save_to_file=False):
+    """
+    クラウドストレージからダウンロードしたファイルを処理し、応答を生成する
+    
+    Args:
+        message (discord.Message): Discordメッセージオブジェクト
+        cleaned_text (str): 処理するテキスト
+        file_data (bytes): ファイルデータ
+        mime_type (str): ファイルのMIMEタイプ
+        save_to_file (bool, optional): 応答をファイルとして保存するかどうか
+    """
+    try:
+        # Geminiを使用して応答を生成
+        response_text = await generate_response_with_file_and_text(message, file_data, cleaned_text, mime_type)
+        
+        # !saveフラグに基づいて処理を分岐
+        if save_to_file:
+            await save_response_as_file(message, response_text)
+        else:
+            await split_and_send_messages(message, response_text, MAX_DISCORD_LENGTH)
+    except Exception as e:
+        await message.channel.send(f"An error occurred while processing the cloud file: {str(e)}")
+
+async def process_graphic_recording_with_cloud_file(message, prompt, file_data, mime_type):
+    """
+    クラウドストレージファイルを使用したグラフィックレコーディング処理
+    
+    Args:
+        message (discord.Message): Discordメッセージオブジェクト
+        prompt (str): グラフィックレコーディング用のプロンプト
+        file_data (bytes): ファイルデータ
+        mime_type (str): ファイルのMIMEタイプ
+    """
+    try:
+        # グラフィックレコーディングのプロンプトを作成
+        enhanced_prompt = create_graphic_recording_prompt(prompt, with_file=True)
+        
+        # Geminiに送信して結果を取得
+        response_text = await generate_response_with_file_and_text(
+            message, file_data, enhanced_prompt, mime_type
+        )
+        
+        # HTML抽出とレスポンス処理
+        await process_graphic_recording_response(message, response_text)
+    except Exception as e:
+        await message.channel.send(f"An error occurred while processing the graphic recording: {str(e)}")
+
 async def split_and_send_messages(message_system, text, max_length):
     """Split the message into chunks and send them, respecting the maximum length."""
     start = 0
@@ -381,22 +774,22 @@ async def generate_image(prompt_text, aspect_ratio):
         raise
 
 
-async def handle_generation(ctx, prompt, aspect_ratio):
+async def handle_generation(message, prompt, aspect_ratio):
     try:
         image = await generate_image(prompt, aspect_ratio)
         with io.BytesIO(image.image_bytes) as image_binary:
             file = discord.File(image_binary, filename="generated_image.jpg")
-            await ctx.send(file=file)
+            await message.channel.send(file=file)
 
         file_data = image.image_bytes
         mime_type = get_mime_type_from_bytes(file_data)
         prompt_message = f"This image was generated by prompt: {prompt}."
-        response_text = await generate_response_with_file_and_text(ctx, file_data, prompt_message, mime_type)  # Added mime_type
-        await split_and_send_messages(ctx, response_text, MAX_DISCORD_LENGTH)
+        response_text = await generate_response_with_file_and_text(message, file_data, prompt_message, mime_type)  # Added mime_type
+        await split_and_send_messages(message, response_text, MAX_DISCORD_LENGTH)
     except ValueError as ve:  # Catch ValueError specifically
-        await ctx.send(f"Invalid input or API error: {str(ve)}")
+        await message.channel.send(f"Invalid input or API error: {str(ve)}")
     except Exception as e:
-        await ctx.send(f"Failed to generate image: {str(e)}")
+        await message.channel.send(f"Failed to generate image: {str(e)}")
 
 async def parse_args(args):
     parts = [part.strip() for part in args.split('|')]
@@ -492,14 +885,14 @@ async def graphic_recording(ctx, *, prompt=""):
         else:
             await process_graphic_recording(ctx, prompt)
 
-async def process_graphic_recording_with_file(ctx, prompt):
+async def process_graphic_recording_with_file(message, prompt):
     """PDF添付ありのグラフィックレコーディング処理"""
-    for attachment in ctx.message.attachments:
+    for attachment in message.attachments:
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(attachment.url) as resp:
                     if resp.status != 200:
-                        await ctx.send('Unable to download the file.')
+                        await message.channel.send('Unable to download the file.')
                         return
                     file_data = await resp.read()
                     mime_type = get_mime_type_from_bytes(file_data)
@@ -509,28 +902,28 @@ async def process_graphic_recording_with_file(ctx, prompt):
                     
                     # Geminiに送信して結果を取得
                     response_text = await generate_response_with_file_and_text(
-                        ctx.message, file_data, enhanced_prompt, mime_type
+                        message, file_data, enhanced_prompt, mime_type
                     )
                     
                     # HTML抽出とレスポンス処理
-                    await process_graphic_recording_response(ctx, response_text)
+                    await process_graphic_recording_response(message, response_text)
                     return
         except Exception as e:
-            await ctx.send(f'An error occurred: {e}')
+            await message.channel.send(f'An error occurred: {e}')
 
-async def process_graphic_recording(ctx, prompt):
+async def process_graphic_recording(message, prompt):
     """テキストのみのグラフィックレコーディング処理"""
     try:
         # グラフィックレコーディングのプロンプトを作成
         enhanced_prompt = create_graphic_recording_prompt(prompt, with_file=False)
         
         # Geminiに送信して結果を取得
-        response_text = await generate_response_with_text(ctx.message, enhanced_prompt)
+        response_text = await generate_response_with_text(message, enhanced_prompt)
         
         # HTML抽出とレスポンス処理
-        await process_graphic_recording_response(ctx, response_text)
+        await process_graphic_recording_response(message, response_text)
     except Exception as e:
-        await ctx.send(f'An error occurred: {e}')
+        await message.channel.send(f'An error occurred: {e}')
 
 def create_graphic_recording_prompt(user_prompt, with_file=False):
     """グラフィックレコーディング用のプロンプトを作成"""
@@ -556,15 +949,15 @@ def create_graphic_recording_prompt(user_prompt, with_file=False):
 """
         return base_prompt + text_instruction
 
-async def process_graphic_recording_response(ctx, response_text):
+async def process_graphic_recording_response(message, response_text):
     """HTMLレスポンスを処理してDiscordに送信"""
     try:
         # HTMLコードを抽出
         html_match = re.search(r'```html\s*([\s\S]*?)\s*```', response_text)
         if not html_match:
             # HTML形式でない場合は通常のテキストとして送信
-            await ctx.send("グラフィックレコーディングの生成に失敗しました。HTMLコードが見つかりません。")
-            await split_and_send_messages(ctx, response_text, MAX_DISCORD_LENGTH)
+            await message.channel.send("グラフィックレコーディングの生成に失敗しました。HTMLコードが見つかりません。")
+            await split_and_send_messages(message, response_text, MAX_DISCORD_LENGTH)
             return
             
         html_code = html_match.group(1)
@@ -575,16 +968,16 @@ async def process_graphic_recording_response(ctx, response_text):
         
         # HTMLファイルを作成して送信
         html_file = discord.File(io.StringIO(html_code), filename=filename)
-        await ctx.send(f"🎨 グラフィックレコーディングが完成しました！", file=html_file)
+        await message.channel.send(f"🎨 グラフィックレコーディングが完成しました！", file=html_file)
         
         # Embedとしても表示
-        await send_graphic_recording_preview(ctx, html_code, response_text)
+        await send_graphic_recording_preview(message, html_code, response_text)
         
     except Exception as e:
-        await ctx.send(f"HTMLの処理中にエラーが発生しました: {e}")
-        await split_and_send_messages(ctx, response_text, MAX_DISCORD_LENGTH)
+        await message.channel.send(f"HTMLの処理中にエラーが発生しました: {e}")
+        await split_and_send_messages(message, response_text, MAX_DISCORD_LENGTH)
 
-async def send_graphic_recording_preview(ctx, html_code, full_response):
+async def send_graphic_recording_preview(message, html_code, full_response):
     """グラフィックレコーディングのプレビューをEmbed形式で表示"""
     try:
         # タイトルを抽出
@@ -661,10 +1054,10 @@ async def send_graphic_recording_preview(ctx, html_code, full_response):
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         embed.set_footer(text=f"Graphic Recording | {timestamp}")
         
-        await ctx.send(embed=embed)
+        await message.channel.send(embed=embed)
         
     except Exception as e:
-        await ctx.send(f"プレビューの作成中にエラーが発生しました: {str(e)}")
+        await message.channel.send(f"プレビューの作成中にエラーが発生しました: {str(e)}")
         # HTML全体をプレビューとして送信せず、エラーのみを表示
 
 # Run the bot
