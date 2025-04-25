@@ -12,6 +12,7 @@ Gemini Discord Bot allows you to converse on Discord using Google's Gemini API. 
 - **Discord Mentions and Special Characters Handling**: Processes mentions and special characters appropriately and sends clean text to the Gemini API.
 - **Long Message Splitting**: Splits messages exceeding Discord's 2000-character limit into smaller chunks for seamless transmission.
 - **Google Search Tool**: Generates responses based on Google Search results.
+- **Cloud File Download**: If a message contains shared links from Dropbox or Google Drive, the bot will download the linked files and include their content when sending the message to Gemini.
 - **Image Generation**: Generates images based on text prompts (currently in beta).
 
 ---
