@@ -35,6 +35,9 @@ Gemini Discord Bot allows you to converse on Discord using Google's Gemini API. 
      # GCP_PROJECT_ID=Your Google Cloud Platform Project ID # Required for Vertex AI
      # GCP_REGION=Your Google Cloud Platform Region # Required for Vertex AI
      IMG_COMMANDS_ENABLED=True/False # Enable/Disable image generation commands (default: False)
+     ALLOWED_USER_IDS=yyyyyyyyyyxxxxx,yyyyyyyyyyyyyyy # Comma-separated list of Discord User IDs allowed to interact with the bot. If not set, all users can interact.
+     DEBUG_SAVE_CLOUD_FILES=True/False # Enable/Disable saving of downloaded cloud files for debugging (default: False)
+     DEBUG_LOG_USER_IDS=True/False # Enable/Disable logging of user IDs for debugging (default: False)
      ```
 
 4. **Install Dependencies**:
