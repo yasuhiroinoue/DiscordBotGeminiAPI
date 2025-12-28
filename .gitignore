@@ -5,3 +5,9 @@
 bot_usage.log
 bot_general.log
 debug_files/
+
+# Python cache files
+__pycache__
+
+# Virtual environment
+venv

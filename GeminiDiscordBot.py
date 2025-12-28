@@ -16,15 +16,15 @@ from google.genai import types
 import datetime  # Added: For timestamp
 import logging  # Added: logging module
 
-MODEL_ID = "gemini-2.5-pro-preview-03-25"
-IMAGEN_MODEL = "imagen-3.0-generate-002"
-
-
 # Dictionary to store chat sessions
 chat = {}
 
 # Load environment variables
 load_dotenv()
+
+MODEL_ID = os.getenv("MODEL_ID")
+IMAGEN_MODEL = os.getenv("IMAGEN_MODEL")
+
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 # Google AI (API KEY)
 # GOOGLE_AI_KEY = os.getenv("GOOGLE_AI_KEY")
