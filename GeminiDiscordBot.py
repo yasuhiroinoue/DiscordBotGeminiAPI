@@ -4,7 +4,7 @@ import re
 import aiohttp
 import io
 
-# import asyncio
+import asyncio
 import magic
 import discord
 import tempfile
@@ -936,7 +936,7 @@ async def handle_generation(message, prompt, aspect_ratio):
             await message.channel.send(file=file)
 
         # Sync context to text chat
-        await update_text_chat_with_image(message, image_data, prompt)
+        asyncio.create_task(update_text_chat_with_image(message, image_data, prompt))
         
     except ValueError as ve:
         await message.channel.send(f"Invalid input or API error: {str(ve)}")
@@ -977,7 +977,7 @@ async def handle_edit_generation(message, prompt):
             await message.channel.send(file=file)
 
         # Sync context to text chat
-        await update_text_chat_with_image(message, image_data, prompt)
+        asyncio.create_task(update_text_chat_with_image(message, image_data, prompt))
 
     except Exception as e:
          await message.channel.send(f"Failed to edit image: {str(e)}")
