@@ -18,12 +18,16 @@ import logging  # Added: logging module
 
 # Dictionary to store chat sessions
 chat = {}
+# Dictionary to store image generation chat sessions
+image_chat = {}
 
 # Load environment variables
 load_dotenv()
 
 MODEL_ID = os.getenv("MODEL_ID")
-IMAGEN_MODEL = os.getenv("IMAGEN_MODEL")
+MODEL_ID = os.getenv("MODEL_ID")
+# IMAGEN_MODEL = os.getenv("IMAGEN_MODEL") # Deprecated
+GEMINI_IMAGE_MODEL = os.getenv("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image")
 
 DISCORD_BOT_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
 # Google AI (API KEY)
@@ -168,6 +172,7 @@ async def on_message(message):
         # Command detection
         save_to_file = False
         img_command = False
+        edit_command = False
         gra_command = False
 
         # Detect !save command
@@ -184,6 +189,16 @@ async def on_message(message):
                 return
             img_command = True
             prompt_text = cleaned_text.replace("!img ", "", 1)
+
+        # Detect !edit command
+        elif cleaned_text.startswith("!edit "):
+            if not IMG_COMMANDS_ENABLED:
+                await message.channel.send(
+                    "The image generation feature is currently disabled"
+                )
+                return
+            edit_command = True
+            prompt_text = cleaned_text.replace("!edit ", "", 1)
 
         # Detect !gra command
         elif cleaned_text.startswith("!gra "):
@@ -223,6 +238,12 @@ async def on_message(message):
                 prompt_text, aspect_ratio = await parse_args(prompt_text)
                 await message.channel.send(f"Prompt: {prompt_text}")
                 await handle_generation(message, prompt_text, aspect_ratio)
+
+            elif edit_command:
+                await message.add_reaction("✏️")
+                # Process !edit command
+                await message.channel.send(f"Editing: {prompt_text}")
+                await handle_edit_generation(message, prompt_text)
 
             elif gra_command:
                 await message.add_reaction("📊")
@@ -826,106 +847,166 @@ async def split_and_send_messages(message_system, text, max_length):
 import logging
 
 
-async def generate_image(prompt_text, aspect_ratio):
-    try:
-        response1 = chat_model.models.generate_images(
-            model=IMAGEN_MODEL,
-            prompt=prompt_text,
-            config=types.GenerateImagesConfig(
-                number_of_images=1,
-                aspect_ratio=aspect_ratio,
-                include_rai_reason=True,
-                output_mime_type="image/jpeg",
-                person_generation="ALLOW_ALL",
-                safety_filter_level="BLOCK_ONLY_HIGH",
-            ),
+# Removed old generate_image function
+# async def generate_image(prompt_text, aspect_ratio): ...
+
+
+async def generate_image_session(message, prompt, aspect_ratio):
+    """Generates an image using a persistent chat session for multi-turn editing."""
+    global image_chat
+    user_id = message.author.id
+
+    # Create a new session for !img command
+    session = chat_model.aio.chats.create(
+        model=GEMINI_IMAGE_MODEL,
+        config=types.GenerateContentConfig(
+            response_modalities=["IMAGE"],
+            image_config=types.ImageConfig(aspect_ratio=aspect_ratio)
         )
+    )
+    image_chat[user_id] = session
 
-        # Log the full response for debugging purposes
-        logging.info("Full response: %s", response1)
-
-        if (
-            not response1
-            or not hasattr(response1, "generated_images")
-            or not response1.generated_images
-        ):
-            logging.error(
-                "Failed to generate image. API response is invalid. Response: %s",
-                response1,
-            )
-            raise ValueError("Failed to generate image. API response is invalid.")
-
-        # Loop through the generated images (in case multiple images are generated)
-        for idx, generated_img in enumerate(response1.generated_images):
-            # If rai_filtered_reason is present, log it
-            if (
-                hasattr(generated_img, "rai_filtered_reason")
-                and generated_img.rai_filtered_reason
-            ):
-                logging.warning(
-                    f"[Index {idx}] RAI Filtered reason: {generated_img.rai_filtered_reason}"
-                )
-
-            # Check if the image object or image_bytes is None
-            if (
-                generated_img.image is None
-                or not hasattr(generated_img.image, "image_bytes")
-                or generated_img.image.image_bytes is None
-            ):
-                # If rai_filtered_reason is available, use it as the error message
-                if (
-                    hasattr(generated_img, "rai_filtered_reason")
-                    and generated_img.rai_filtered_reason
-                ):
-                    error_msg = (
-                        f"Failed to generate image. {generated_img.rai_filtered_reason}"
-                    )
-                else:
-                    error_msg = (
-                        "Failed to generate image. 'image_bytes' is missing or None."
-                    )
-                logging.error(error_msg)
-                raise ValueError(error_msg)
-
-        # Here, we return only one image as an example
-        return response1.generated_images[0].image
-
+    try:
+        response = await session.send_message(prompt)
+        return process_image_response(response)
     except Exception as e:
-        logging.error("Error in generate_image: %s", e, exc_info=True)
+        logging.error("Error in generate_image_session: %s", e, exc_info=True)
         raise
+
+async def edit_image_session(message, prompt):
+    """Edits an image using the existing chat session."""
+    global image_chat
+    user_id = message.author.id
+    session = image_chat.get(user_id)
+
+    if not session:
+        # If no session exists, try to start one if there's an attachment, otherwise error
+        if message.attachments:
+             # Start new session with attachment
+             # For simplicity, we just initialize a session. 
+             # The attachment handling should ideally happen in the caller or we pass it here.
+             # But !edit usually implies modifying previous context. 
+             # If starting from scratch with file, !img usually handles it or we make !edit smart.
+             # For now, let's say !edit requires an existing session or we treat it like !img if file provided?
+             # Implementation plan said: "If no [session], verify if there's a referenced image/attachment to start a new edit session."
+             
+             # Let's create a new session
+             session = chat_model.aio.chats.create(
+                model=GEMINI_IMAGE_MODEL,
+                config=types.GenerateContentConfig(
+                    response_modalities=["IMAGE"],
+                )
+             )
+             image_chat[user_id] = session
+             # processing of attachment happens in handle_edit_generation
+        else:
+            raise ValueError("No active image session found. Use !img to start one or attach an image.")
+
+    try:
+        # If there are attachments, we need to extract them and send with prompt
+        # The session.send_message handles parts.
+        # But wait, handle_edit_generation will pass the parts.
+        # So this function should accept parts or handle it.
+        # Let's change signature to accept content (which can be string or list of parts)
+        pass 
+    except Exception:
+        pass
+
+# Helper to process response and extract image
+def process_image_response(response):
+    for part in response.candidates[0].content.parts:
+        if part.inline_data:
+            return part.inline_data.data
+    raise ValueError("No image found in response.")
 
 
 async def handle_generation(message, prompt, aspect_ratio):
+    """Handles the !img command."""
     try:
-        image = await generate_image(prompt, aspect_ratio)
-        with io.BytesIO(image.image_bytes) as image_binary:
-            file = discord.File(image_binary, filename="generated_image.jpg")
-            await message.channel.send(file=file)
+        parts = [prompt]
+        if message.attachments:
+             attachment_parts = await download_attachments_as_parts(message)
+             parts.extend(attachment_parts)
 
-        file_data = image.image_bytes
-        mime_type = get_mime_type_from_bytes(file_data)
-        prompt_message = f"This image was generated by prompt: {prompt}."
-        response_text = await generate_response_with_file_and_text(
-            message, file_data, prompt_message, mime_type
-        )  # Added mime_type
-        await split_and_send_messages(message, response_text, MAX_DISCORD_LENGTH)
-    except ValueError as ve:  # Catch ValueError specifically
+        image_data = await generate_image_session(message, parts, aspect_ratio)
+        
+        with io.BytesIO(image_data) as image_binary:
+            file = discord.File(image_binary, filename="generated_image.png")
+            await message.channel.send(file=file)
+        
+    except ValueError as ve:
         await message.channel.send(f"Invalid input or API error: {str(ve)}")
     except Exception as e:
         await message.channel.send(f"Failed to generate image: {str(e)}")
 
+async def handle_edit_generation(message, prompt):
+    """Handles the !edit command."""
+    global image_chat
+    user_id = message.author.id
+    session = image_chat.get(user_id)
+    
+    parts = [prompt]
+    if message.attachments:
+        attachment_parts = await download_attachments_as_parts(message)
+        parts.extend(attachment_parts)
+
+    if not session:
+        # Create new session if attachments exist, else error
+        if message.attachments:
+             session = chat_model.aio.chats.create(
+                model=GEMINI_IMAGE_MODEL,
+                config=types.GenerateContentConfig(
+                    response_modalities=["IMAGE"],
+                 )
+             )
+             image_chat[user_id] = session
+        else:
+             await message.channel.send("No active image session. Use !img to start one.")
+             return
+
+    try:
+        response = await session.send_message(parts)
+        image_data = process_image_response(response)
+        
+        with io.BytesIO(image_data) as image_binary:
+            file = discord.File(image_binary, filename="edited_image.png")
+            await message.channel.send(file=file)
+    except Exception as e:
+         await message.channel.send(f"Failed to edit image: {str(e)}")
+
+
 
 async def parse_args(args):
+    """
+    Parses arguments for image generation.
+    Expected format: prompt | aspect_ratio
+    """
     parts = [part.strip() for part in args.split("|")]
     prompt = parts[0] if len(parts) > 0 else ""
-    aspect_ratio = "16:9"
+    aspect_ratio = "1:1" # Default to 1:1 as it is standard, or keep 16:9 if preferred
     if len(parts) > 1:
         aspect_ratio = parts[1]
     return prompt, aspect_ratio
 
+async def download_attachments_as_parts(message):
+    """Downloads attachments and returns them as a list of types.Part."""
+    parts = []
+    if message.attachments:
+        for attachment in message.attachments:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(attachment.url) as resp:
+                        if resp.status == 200:
+                            data = await resp.read()
+                            mime_type = get_mime_type_from_bytes(data)
+                            parts.append(types.Part.from_bytes(data=data, mime_type=mime_type))
+            except Exception as e:
+                logging.error(f"Failed to download attachment {attachment.filename}: {e}")
+    return parts
+
 
 @bot.command(name="img")
-async def generate(ctx, *, args):
+async def generate(ctx, *, args=""): # Allow empty args if file attached
     if not IMG_COMMANDS_ENABLED:
         await ctx.send("The feature is currently disabled")
         return
@@ -933,8 +1014,31 @@ async def generate(ctx, *, args):
     try:
         await ctx.message.add_reaction("🎨")
         prompt_text, aspect_ratio = await parse_args(args)
-        await ctx.send(f"Prompt: {prompt_text}")
+        if not prompt_text and not ctx.message.attachments:
+             # If no prompt and no attachments, ask for input
+             await ctx.send("Please provide a prompt or attach an image.")
+             return
+             
+        await ctx.send(f"Generating image with prompt: {prompt_text}")
         await handle_generation(ctx, prompt_text, aspect_ratio)
+    except Exception as e:
+        await ctx.send(f"An error occurred: {str(e)}")
+
+@bot.command(name="edit")
+async def edit_image(ctx, *, prompt=""):
+    """Edits the last generated image or starts a new edit session with an attachment."""
+    if not IMG_COMMANDS_ENABLED:
+        await ctx.send("The feature is currently disabled")
+        return
+
+    try:
+        await ctx.message.add_reaction("✏️")
+        if not prompt and not ctx.message.attachments:
+            await ctx.send("Please provide an edit instruction.")
+            return
+            
+        await ctx.send(f"Editing image with instruction: {prompt}")
+        await handle_edit_generation(ctx, prompt)
     except Exception as e:
         await ctx.send(f"An error occurred: {str(e)}")
 
