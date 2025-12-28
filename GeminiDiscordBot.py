@@ -314,7 +314,8 @@ async def process_text_message(message, cleaned_text, save_to_file=False):
     """Processes a text message and generates a response using a chat model."""
     if re.search(r"^RESET$", cleaned_text, re.IGNORECASE):
         chat.pop(message.author.id, None)
-        await message.channel.send(f"🧹 History Reset for user: {message.author.name}")
+        image_chat.pop(message.author.id, None)
+        await message.channel.send(f"🧹 History (Text & Image) Reset for user: {message.author.name}")
         return
 
     await message.add_reaction("💬")
@@ -933,6 +934,9 @@ async def handle_generation(message, prompt, aspect_ratio):
         with io.BytesIO(image_data) as image_binary:
             file = discord.File(image_binary, filename="generated_image.png")
             await message.channel.send(file=file)
+
+        # Sync context to text chat
+        await update_text_chat_with_image(message, image_data, prompt)
         
     except ValueError as ve:
         await message.channel.send(f"Invalid input or API error: {str(ve)}")
@@ -971,6 +975,10 @@ async def handle_edit_generation(message, prompt):
         with io.BytesIO(image_data) as image_binary:
             file = discord.File(image_binary, filename="edited_image.png")
             await message.channel.send(file=file)
+
+        # Sync context to text chat
+        await update_text_chat_with_image(message, image_data, prompt)
+
     except Exception as e:
          await message.channel.send(f"Failed to edit image: {str(e)}")
 
@@ -1041,6 +1049,33 @@ async def edit_image(ctx, *, prompt=""):
         await handle_edit_generation(ctx, prompt)
     except Exception as e:
         await ctx.send(f"An error occurred: {str(e)}")
+
+
+async def update_text_chat_with_image(message, image_data, prompt_text):
+    """Updates the text chat session with the generated image context."""
+    global chat
+    user_id = message.author.id
+    chat_session = chat.get(user_id)
+    if not chat_session:
+        chat_session = chat_model.aio.chats.create(
+            model=MODEL_ID,
+            config=generate_content_config,
+        )
+        chat[user_id] = chat_session
+
+    try:
+        # Construct message content: context info + image
+        context_text = f"Context: The user generated/edited an image with the prompt: '{prompt_text}'. The image is attached."
+        
+        mime_type = get_mime_type_from_bytes(image_data)
+        image_part = types.Part.from_bytes(data=image_data, mime_type=mime_type)
+        
+        # Send to model. We deliberately ignore the response as this is just for context.
+        await chat_session.send_message([context_text, image_part])
+        logging.info(f"Updated text chat context for user {user_id} with new image.")
+        
+    except Exception as e:
+        logging.error(f"Failed to update text chat context: {e}")
 
 
 # Template for graphic recording
