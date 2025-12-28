@@ -13,7 +13,10 @@ Gemini Discord Bot allows you to converse on Discord using Google's Gemini API. 
 - **Long Message Splitting**: Splits messages exceeding Discord's 2000-character limit into smaller chunks for seamless transmission.
 - **Google Search Tool**: Generates responses based on Google Search results.
 - **Cloud File Download**: If a message contains shared links from Dropbox or Google Drive, the bot will download the linked files and include their content when sending the message to Gemini.
-- **Image Generation**: Generates images based on text prompts (currently in beta).
+- **Multimodal Support**: Attach multiple files (images, PDFs, etc.) in a single message for analysis.
+- **Image Generation (Gemini 2.5 Flash)**: Generates high-quality images using the Gemini 2.5 Flash Image model.
+- **Multi-turn Image Editing**: Edit generated images conversationally using `!edit`.
+- **Context Synchronization**: Automatically shares generated/edited images with the main chat, allowing for immediate follow-up questions (e.g., "What is in this image?").
 
 ---
 
@@ -31,11 +34,18 @@ Gemini Discord Bot allows you to converse on Discord using Google's Gemini API. 
 
      ```env
      DISCORD_BOT_TOKEN=Your Discord Bot Token
-     GOOGLE_AI_KEY=Your Google AI Studio API Key # Not needed for Vertex AI
+     MODEL_ID="gemini-3-pro-preview" # or your preferred model
+     # IMAGEN_MODEL="imagen-3.0-generate-001" # Deprecated
+     GEMINI_IMAGE_MODEL="gemini-2.5-flash-image" # New image generation model
+     
+     # Create at https://makersuite.google.com/
+     GOOGLE_AI_KEY=Your Google AI Studio API Key
+     
      # GCP_PROJECT_ID=Your Google Cloud Platform Project ID # Required for Vertex AI
      # GCP_REGION=Your Google Cloud Platform Region # Required for Vertex AI
+     
      IMG_COMMANDS_ENABLED=True/False # Enable/Disable image generation commands (default: False)
-     ALLOWED_USER_IDS=yyyyyyyyyyxxxxx,yyyyyyyyyyyyyyy # Comma-separated list of Discord User IDs allowed to interact with the bot. If not set, all users can interact.
+     ALLOWED_USER_IDS=yyyyyyyyyyxxxxx,yyyyyyyyyyyyyyy # Comma-separated list of Discord User IDs
      DEBUG_SAVE_CLOUD_FILES=True/False # Enable/Disable saving of downloaded cloud files for debugging (default: False)
      DEBUG_LOG_USER_IDS=True/False # Enable/Disable logging of user IDs for debugging (default: False)
      ```
@@ -74,18 +84,29 @@ Gemini Discord Bot allows you to converse on Discord using Google's Gemini API. 
 - **Text Conversation**: Mention the bot or send a direct message (DM) to start a conversation.
 - **File Recognition**: Upload a file, with or without accompanying text, and the bot will analyze and respond to its content.
 - **Reset Conversation History**: Send `RESET` to clear the conversation history.
-- **Image Generation**: Use the `!img` command to generate images with the following format:
+- **Image Generation**: Use the `!img` command to start a new image generation session.
   ```text
-  !img <prompt>|<negative prompt>|<aspect ratio>
+  !img <prompt> | <aspect_ratio>
   ```
   - **Prompt**: Describe the image to generate.
-  - **Negative Prompt** (optional): Specify what to exclude.
-  - **Aspect Ratio** (optional): Specify aspect ratio (e.g., `1:1`).
+  - **Aspect Ratio** (optional): Specify aspect ratio (e.g., `16:9`, `1:1`). Default is `1:1`.
+  - **Attachments**: You can attach an image to use as a reference.
 
   Example:
   ```text
-  !img a cute cat|blurry|1:1
+  !img a futuristic city | 16:9
   ```
+
+- **Image Editing**: Use the `!edit` command to modify the last generated image.
+  ```text
+  !edit <instruction>
+  ```
+  - **Instruction**: Describe how to change the image (e.g., "Make it night", "Add a flying car").
+  - The context is preserved, allowing for continuous iteration.
+
+- **Multimodal Chat**:
+  - After generating or editing an image, it is automatically shared with the text chat.
+  - You can immediately ask questions about the image in the normal chat (e.g., "Describe the architecture").
 
 ---
 
