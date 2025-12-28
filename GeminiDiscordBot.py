@@ -250,32 +250,43 @@ def get_mime_type_from_bytes(byte_data):
 
 async def process_attachments(message, cleaned_text, save_to_file=False):
     """Process message attachments and generate responses."""
+    files_data = []
+
+    # Collect all attachments
     for attachment in message.attachments:
-        await message.add_reaction("📄")
         try:
             async with aiohttp.ClientSession() as session:
                 async with session.get(attachment.url) as resp:
                     if resp.status != 200:
-                        await message.channel.send("Unable to download the file.")
-                        return
+                        await message.channel.send(f"Unable to download the file: {attachment.filename}")
+                        continue
                     file_data = await resp.read()
                     mime_type = get_mime_type_from_bytes(file_data)
-                    response_text = await generate_response_with_file_and_text(
-                        message, file_data, cleaned_text, mime_type
-                    )
-
-                    # Added: !save command processing
-                    if save_to_file:
-                        await save_response_as_file(message, response_text)
-                    else:
-                        await split_and_send_messages(
-                            message, response_text, MAX_DISCORD_LENGTH
-                        )
-                    return
+                    files_data.append({"data": file_data, "mime_type": mime_type})
         except aiohttp.ClientError as e:
-            await message.channel.send(f"Failed to download the file: {e}")
+            await message.channel.send(f"Failed to download the file {attachment.filename}: {e}")
         except Exception as e:
-            await message.channel.send(f"An unexpected error occurred: {e}")
+            await message.channel.send(f"An unexpected error occurred with {attachment.filename}: {e}")
+
+    if not files_data:
+        return
+
+    await message.add_reaction("📄")
+    
+    try:
+        response_text = await generate_response_with_files_and_text(
+            message, files_data, cleaned_text
+        )
+
+        # Added: !save command processing
+        if save_to_file:
+            await save_response_as_file(message, response_text)
+        else:
+            await split_and_send_messages(
+                message, response_text, MAX_DISCORD_LENGTH
+            )
+    except Exception as e:
+        await message.channel.send(f"An unexpected error occurred during generation: {e}")
 
 
 async def process_text_message(message, cleaned_text, save_to_file=False):
@@ -429,8 +440,14 @@ async def generate_response_with_text(message, cleaned_text):
         return "An error occurred while generating the response."
 
 
-async def generate_response_with_file_and_text(message, file, text, _mime_type):
-    """Generate a response based on the provided file and text input."""
+async def generate_response_with_files_and_text(message, files, text):
+    """Generate a response based on the provided files and text input.
+    
+    Args:
+        message: Discord message object.
+        files (list): List of dicts, each containing 'data' (bytes) and 'mime_type' (str).
+        text (str): The text prompt.
+    """
     global chat
     user_id = message.author.id
     chat_session = chat.get(user_id)
@@ -441,11 +458,11 @@ async def generate_response_with_file_and_text(message, file, text, _mime_type):
         )
         chat[user_id] = chat_session
     try:
-        # file_like_object = io.BytesIO(file)
-
-        text_part = f"\n{text if text else 'What is this?'}"
-        file_byte = types.Part.from_bytes(data=file, mime_type=_mime_type)
-        prompt_parts = [text_part, file_byte]
+        prompt_parts = [text if text else 'What is this?']
+        
+        for file_info in files:
+            file_byte = types.Part.from_bytes(data=file_info['data'], mime_type=file_info['mime_type'])
+            prompt_parts.append(file_byte)
 
         answer = await chat_session.send_message(prompt_parts)
         return process_answer(answer)
@@ -742,8 +759,9 @@ async def process_cloud_file(
     """
     try:
         # Generate response using Gemini
-        response_text = await generate_response_with_file_and_text(
-            message, file_data, cleaned_text, mime_type
+        files_data = [{"data": file_data, "mime_type": mime_type}]
+        response_text = await generate_response_with_files_and_text(
+            message, files_data, cleaned_text
         )
 
         # Branch processing based on !save flag
@@ -773,8 +791,9 @@ async def process_graphic_recording_with_cloud_file(
         enhanced_prompt = create_graphic_recording_prompt(prompt, with_file=True)
 
         # Send to Gemini and get the result
-        response_text = await generate_response_with_file_and_text(
-            message, file_data, enhanced_prompt, mime_type
+        files_data = [{"data": file_data, "mime_type": mime_type}]
+        response_text = await generate_response_with_files_and_text(
+            message, files_data, enhanced_prompt
         )
 
         # HTML extraction and response processing
