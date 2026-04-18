@@ -110,6 +110,15 @@ Gemini Discord Bot allows you to converse on Discord using Google's Gemini API. 
 
 ---
 
+## Security Considerations
+
+**Safety filters are disabled by default.** In `GeminiDiscordBot.py`, all four Gemini safety categories (`HARM_CATEGORY_HATE_SPEECH`, `HARM_CATEGORY_DANGEROUS_CONTENT`, `HARM_CATEGORY_SEXUALLY_EXPLICIT`, `HARM_CATEGORY_HARASSMENT`) are configured with `threshold="OFF"` in `generate_content_config`. Combined with an open access list, this lets anyone who can message the bot generate content that would otherwise be filtered.
+
+- **Always set `ALLOWED_USER_IDS` for any non-private deployment.** When it is empty, the startup log prints `Warning: No ALLOWED_USER_IDS set. Bot will respond to everyone.` — treat this as a deployment blocker unless the bot is truly private.
+- To re-enable moderation, edit `generate_content_config` in `GeminiDiscordBot.py` and raise the thresholds (for example, `threshold="BLOCK_MEDIUM_AND_ABOVE"`). Refer to the [Gemini API safety settings documentation](https://ai.google.dev/gemini-api/docs/safety-settings) for the available values.
+
+---
+
 ## Important Notes
 
 - The Google AI Studio API has usage limits and may incur charges beyond the free tier. Refer to the [Google AI Studio documentation](https://makersuite.google.com/) for pricing details.
