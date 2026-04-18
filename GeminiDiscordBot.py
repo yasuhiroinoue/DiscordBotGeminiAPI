@@ -824,45 +824,6 @@ async def generate_image_session(message, prompt, aspect_ratio):
         logging.error("Error in generate_image_session: %s", e, exc_info=True)
         raise
 
-async def edit_image_session(message, prompt):
-    """Edits an image using the existing chat session."""
-    global image_chat
-    user_id = message.author.id
-    session = image_chat.get(user_id)
-
-    if not session:
-        # If no session exists, try to start one if there's an attachment, otherwise error
-        if message.attachments:
-             # Start new session with attachment
-             # For simplicity, we just initialize a session. 
-             # The attachment handling should ideally happen in the caller or we pass it here.
-             # But !edit usually implies modifying previous context. 
-             # If starting from scratch with file, !img usually handles it or we make !edit smart.
-             # For now, let's say !edit requires an existing session or we treat it like !img if file provided?
-             # Implementation plan said: "If no [session], verify if there's a referenced image/attachment to start a new edit session."
-             
-             # Let's create a new session
-             session = chat_model.aio.chats.create(
-                model=GEMINI_IMAGE_MODEL,
-                config=types.GenerateContentConfig(
-                    response_modalities=["IMAGE"],
-                )
-             )
-             image_chat[user_id] = session
-             # processing of attachment happens in handle_edit_generation
-        else:
-            raise ValueError("No active image session found. Use !img to start one or attach an image.")
-
-    try:
-        # If there are attachments, we need to extract them and send with prompt
-        # The session.send_message handles parts.
-        # But wait, handle_edit_generation will pass the parts.
-        # So this function should accept parts or handle it.
-        # Let's change signature to accept content (which can be string or list of parts)
-        pass 
-    except Exception:
-        pass
-
 # Helper to process response and extract image
 def process_image_response(response):
     for part in response.candidates[0].content.parts:
@@ -961,44 +922,6 @@ async def download_attachments_as_parts(message):
             except Exception as e:
                 logging.error(f"Failed to download attachment {attachment.filename}: {e}")
     return parts
-
-
-@bot.command(name="img")
-async def generate(ctx, *, args=""): # Allow empty args if file attached
-    if not IMG_COMMANDS_ENABLED:
-        await ctx.send("The feature is currently disabled")
-        return
-
-    try:
-        await ctx.message.add_reaction("🎨")
-        prompt_text, aspect_ratio = await parse_args(args)
-        if not prompt_text and not ctx.message.attachments:
-             # If no prompt and no attachments, ask for input
-             await ctx.send("Please provide a prompt or attach an image.")
-             return
-             
-        await ctx.send(f"Generating image with prompt: {prompt_text}")
-        await handle_generation(ctx, prompt_text, aspect_ratio)
-    except Exception as e:
-        await ctx.send(f"An error occurred: {str(e)}")
-
-@bot.command(name="edit")
-async def edit_image(ctx, *, prompt=""):
-    """Edits the last generated image or starts a new edit session with an attachment."""
-    if not IMG_COMMANDS_ENABLED:
-        await ctx.send("The feature is currently disabled")
-        return
-
-    try:
-        await ctx.message.add_reaction("✏️")
-        if not prompt and not ctx.message.attachments:
-            await ctx.send("Please provide an edit instruction.")
-            return
-            
-        await ctx.send(f"Editing image with instruction: {prompt}")
-        await handle_edit_generation(ctx, prompt)
-    except Exception as e:
-        await ctx.send(f"An error occurred: {str(e)}")
 
 
 async def update_text_chat_with_image(message, image_data, prompt_text):
