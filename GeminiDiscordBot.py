@@ -173,7 +173,6 @@ async def on_message(message):
         save_to_file = False
         img_command = False
         edit_command = False
-        gra_command = False
 
         # Detect !save command
         if cleaned_text.startswith("!save "):
@@ -200,11 +199,6 @@ async def on_message(message):
             edit_command = True
             prompt_text = cleaned_text.replace("!edit ", "", 1)
 
-        # Detect !gra command
-        elif cleaned_text.startswith("!gra "):
-            gra_command = True
-            prompt_text = cleaned_text.replace("!gra ", "", 1)
-
         async with message.channel.typing():
             # Process cloud storage link (if exists)
             if cloud_links:
@@ -214,16 +208,9 @@ async def on_message(message):
                         message, cloud_links[0]
                     )
 
-                    if gra_command:
-                        # Graphic recording process for !gra command
-                        await process_graphic_recording_with_cloud_file(
-                            message, prompt_text, file_data, mime_type
-                        )
-                    else:
-                        # Normal processing
-                        await process_cloud_file(
-                            message, cleaned_text, file_data, mime_type, save_to_file
-                        )
+                    await process_cloud_file(
+                        message, cleaned_text, file_data, mime_type, save_to_file
+                    )
                 except Exception as e:
                     await message.channel.send(
                         f"Failed to process cloud storage link: {str(e)}"
@@ -244,14 +231,6 @@ async def on_message(message):
                 # Process !edit command
                 await message.channel.send(f"Editing: {prompt_text}")
                 await handle_edit_generation(message, prompt_text)
-
-            elif gra_command:
-                await message.add_reaction("📊")
-                # Process !gra command
-                if message.attachments:
-                    await process_graphic_recording_with_file(message, prompt_text)
-                else:
-                    await process_graphic_recording(message, prompt_text)
 
             elif message.attachments:
                 await process_attachments(message, cleaned_text, save_to_file)
@@ -797,35 +776,6 @@ async def process_cloud_file(
         )
 
 
-async def process_graphic_recording_with_cloud_file(
-    message, prompt, file_data, mime_type
-):
-    """Graphic recording process using a cloud storage file.
-
-    Args:
-        message (discord.Message): Discord message object
-        prompt (str): Prompt for graphic recording
-        file_data (bytes): File data
-        mime_type (str): MIME type of the file
-    """
-    try:
-        # Create graphic recording prompt
-        enhanced_prompt = create_graphic_recording_prompt(prompt, with_file=True)
-
-        # Send to Gemini and get the result
-        files_data = [{"data": file_data, "mime_type": mime_type}]
-        response_text = await generate_response_with_files_and_text(
-            message, files_data, enhanced_prompt
-        )
-
-        # HTML extraction and response processing
-        await process_graphic_recording_response(message, response_text)
-    except Exception as e:
-        await message.channel.send(
-            f"An error occurred while processing the graphic recording: {str(e)}"
-        )
-
-
 async def split_and_send_messages(message_system, text, max_length):
     """Split the message into chunks and send them, respecting the maximum length."""
     start = 0
@@ -1076,276 +1026,6 @@ async def update_text_chat_with_image(message, image_data, prompt_text):
         
     except Exception as e:
         logging.error(f"Failed to update text chat context: {e}")
-
-
-# Template for graphic recording
-GRAPHIC_RECORDING_TEMPLATE = """
-# グラフィックレコーディング風インフォグラフィック変換プロンプト
-## 目的
-  以下の内容を、超一流デザイナーが作成したような、日本語で完璧なグラフィックレコーディング風のHTMLインフォグラフィックに変換してください。情報設計とビジュアルデザインの両面で最高水準を目指します
-  手書き風の図形やアイコンを活用して内容を視覚的に表現します。
-## デザイン仕様
-### 1. カラースキーム
-```
-  <palette>
-  <color name='ファッション-1' rgb='593C47' r='89' g='59' b='70' />
-  <color name='ファッション-2' rgb='F2E63D' r='242' g='230' b='60' />
-  <color name='ファッション-3' rgb='F2C53D' r='242' g='196' b='60' />
-  <color name='ファッション-4' rgb='F25C05' r='242' g='91' b='4' />
-  <color name='ファッション-5' rgb='F24405' r='242' g='68' b='4' />
-  </palette>
-```
-### 2. グラフィックレコーディング要素
-- 左上から右へ、上から下へと情報を順次配置
-- 日本語の手書き風フォントの使用（Yomogi, Zen Kurenaido, Kaisei Decol）
-- 手描き風の囲み線、矢印、バナー、吹き出し
-- テキストと視覚要素（アイコン、シンプルな図形）の組み合わせ
-- キーワードの強調（色付き下線、マーカー効果）
-- 関連する概念を線や矢印で接続
-- 絵文字やアイコンを効果的に配置（✏️📌📝🔍📊など）
-### 3. タイポグラフィ
-  - タイトル：32px、グラデーション効果、太字
-  - サブタイトル：16px、#475569
-  - セクション見出し：18px、#1e40af、アイコン付き
-  - 本文：14px、#334155、行間1.4
-  - フォント指定：
-    ```html
-    <style>
-    
-@import
- url('https://fonts.googleapis.com/css2?family=Kaisei+Decol&family=Yomogi&family=Zen+Kurenaido&display=swap');
-    </style>
-    ```
-### 4. レイアウト
-  - ヘッダー：左揃えタイトル＋右揃え日付/出典
-  - 3カラム構成：左側33%、中央33%、右側33%
-  - カード型コンポーネント：白背景、角丸12px、微細シャドウ
-  - セクション間の適切な余白と階層構造
-  - 適切にグラスモーフィズムを活用
-  - 横幅は100%にして
-## グラフィックレコーディング表現技法
-- テキストと視覚要素のバランスを重視
-- キーワードを囲み線や色で強調
-- 簡易的なアイコンや図形で概念を視覚化
-- 数値データは簡潔なグラフや図表で表現
-- 接続線や矢印で情報間の関係性を明示
-- 余白を効果的に活用して視認性を確保
-## 全体的な指針
-- 読み手が自然に視線を移動できる配置
-- 情報の階層と関連性を視覚的に明確化
-- 手書き風の要素で親しみやすさを演出
-- 視覚的な記憶に残るデザイン
-- フッターに出典情報を明記
-"""
-
-
-# Implementation of !gra command
-@bot.command(name="gra")
-async def graphic_recording(ctx, *, prompt=""):
-    """Create a graphic recording from PDF or text prompt."""
-    await ctx.message.add_reaction("📊")  # Add reaction to indicate command reception
-
-    async with ctx.typing():
-        if ctx.message.attachments:
-            await process_graphic_recording_with_file(ctx, prompt)
-        else:
-            await process_graphic_recording(ctx, prompt)
-
-
-async def process_graphic_recording_with_file(message, prompt):
-    """Graphic recording process with PDF attachment."""
-    for attachment in message.attachments:
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(attachment.url) as resp:
-                    if resp.status != 200:
-                        await message.channel.send("Unable to download the file.")
-                        return
-                    file_data = await resp.read()
-                    mime_type = get_mime_type_from_bytes(file_data)
-
-                    # Create graphic recording prompt
-                    enhanced_prompt = create_graphic_recording_prompt(
-                        prompt, with_file=True
-                    )
-
-                    # Send to Gemini and get the result
-                    response_text = await generate_response_with_file_and_text(
-                        message, file_data, enhanced_prompt, mime_type
-                    )
-
-                    # HTML extraction and response processing
-                    await process_graphic_recording_response(message, response_text)
-                    return
-        except Exception as e:
-            await message.channel.send(f"An error occurred: {e}")
-
-
-async def process_graphic_recording(message, prompt):
-    """Graphic recording process for text only."""
-    try:
-        # Create graphic recording prompt
-        enhanced_prompt = create_graphic_recording_prompt(prompt, with_file=False)
-
-        # Send to Gemini and get the result
-        response_text = await generate_response_with_text(message, enhanced_prompt)
-
-        # HTML extraction and response processing
-        await process_graphic_recording_response(message, response_text)
-    except Exception as e:
-        await message.channel.send(f"An error occurred: {e}")
-
-
-def create_graphic_recording_prompt(user_prompt, with_file=False):
-    """Create a prompt for graphic recording."""
-    base_prompt = GRAPHIC_RECORDING_TEMPLATE
-
-    if with_file:
-        file_instruction = f"""
-## 変換する文章/記事
-添付されたPDFファイルを分析し、その内容を理解してください。以下のプロンプトに基づいて、PDFの内容をグラフィックレコーディングとしてまとめてください:
-{user_prompt}
-
-出力形式：完全なHTMLコードで返してください。```html ... ```の形式で返してください。HTMLにはすべてのスタイルを含め、外部リソースへの依存がないようにしてください。
-"""
-        return base_prompt + file_instruction
-    else:
-        text_instruction = f"""
-## 変換する文章/記事
-以下のプロンプトに基づいて、グラフィックレコーディングを作成してください:
-{user_prompt}
-これまでの会話履歴も考慮に入れてください。
-
-出力形式：完全なHTMLコードで返してください。```html ... ```の形式で返してください。HTMLにはすべてのスタイルを含め、外部リソースへの依存がないようにしてください。
-"""
-        return base_prompt + text_instruction
-
-
-async def process_graphic_recording_response(message, response_text):
-    """Process the HTML response and send it to Discord."""
-    try:
-        # Extract HTML code
-        html_match = re.search(r"```html\s*([\s\S]*?)\s*```", response_text)
-        if not html_match:
-            # If not in HTML format, send as normal text
-            await message.channel.send(
-                "グラフィックレコーディングの生成に失敗しました。HTMLコードが見つかりません。"
-            )
-            await split_and_send_messages(message, response_text, MAX_DISCORD_LENGTH)
-            return
-
-        html_code = html_match.group(1)
-
-        # Save HTML as a file
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"graphic_recording_{timestamp}.html"
-
-        # Create and send HTML file
-        html_file = discord.File(io.StringIO(html_code), filename=filename)
-        await message.channel.send(
-            f"🎨 グラフィックレコーディングが完成しました！", file=html_file
-        )
-
-        # Display as Embed as well
-        await send_graphic_recording_preview(message, html_code, response_text)
-
-    except Exception as e:
-        await message.channel.send(f"HTMLの処理中にエラーが発生しました: {e}")
-        await split_and_send_messages(message, response_text, MAX_DISCORD_LENGTH)
-
-
-async def send_graphic_recording_preview(message, html_code, full_response):
-    """Display a preview of the graphic recording in Embed format."""
-    try:
-        # Extract title
-        title_match = re.search(r"<h1[^>]*>(.*?)<\/h1>", html_code, re.DOTALL)
-        title = title_match.group(1) if title_match else "グラフィックレコーディング"
-        title = re.sub(r"<[^>]+>", "", title)  # Remove HTML tags
-
-        # Extract description (content of the first paragraph or div)
-        desc_match = re.search(
-            r"<p[^>]*>(.*?)<\/p>|<div[^>]*>(.*?)<\/div>", html_code, re.DOTALL
-        )
-        description = (
-            desc_match.group(1)
-            if desc_match and desc_match.group(1)
-            else desc_match.group(2) if desc_match else "内容のプレビュー"
-        )
-
-        # Remove HTML element tags to make plain text
-        description = re.sub(r"<[^>]+>", "", description)
-        # Discord embed description limit is 4096 characters
-        description = (
-            description[:2000] + "..." if len(description) > 2000 else description
-        )
-
-        # Create Embed
-        embed = discord.Embed(
-            title=title[:256],  # Title limit is 256 characters
-            description=description,
-            color=0xF25C05,  # Template 'Fashion-4' color
-        )
-
-        # Extract key points (list elements, etc.)
-        list_items = re.findall(r"<li[^>]*>(.*?)<\/li>", html_code, re.DOTALL)
-        if list_items:
-            # Get key points within limits
-            key_points = []
-            points_text = ""
-            for item in list_items:
-                plain_text = re.sub(r"<[^>]+>", "", item).strip()
-                if plain_text:
-                    new_point = f"• {plain_text}\n"
-                    # Field value limit is 1024 characters
-                    if len(points_text + new_point) > 1000:  # Add some buffer
-                        points_text += "..."
-                        break
-                    points_text += new_point
-                    key_points.append(plain_text)
-
-            if points_text:
-                embed.add_field(
-                    name="🔑 キーポイント",
-                    value=points_text[:1024],  # Ensure it fits within the limit
-                    inline=False,
-                )
-
-        # Extract headings
-        headings = re.findall(r"<h[2-4][^>]*>(.*?)<\/h[2-4]>", html_code, re.DOTALL)
-        if headings:
-            # Get headings within limits
-            headings_text = ""
-            processed_headings = []
-
-            for h in headings:
-                plain_heading = re.sub(r"<[^>]+>", "", h).strip()
-                if plain_heading:
-                    new_heading = f"📌 {plain_heading}\n"
-                    # Field value limit is 1024 characters
-                    if len(headings_text + new_heading) > 1000:  # Add some buffer
-                        headings_text += "..."
-                        break
-                    headings_text += new_heading
-                    processed_headings.append(plain_heading)
-
-            if headings_text:
-                embed.add_field(
-                    name="📋 セクション",
-                    value=headings_text[:1024],  # Ensure it fits within the limit
-                    inline=False,
-                )
-
-        # Footer
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        embed.set_footer(text=f"Graphic Recording | {timestamp}")
-
-        await message.channel.send(embed=embed)
-
-    except Exception as e:
-        await message.channel.send(
-            f"An error occured while creating the preview: {str(e)}"
-        )
-        # Do not send the entire HTML as preview, only display the error
 
 
 # Run the bot
