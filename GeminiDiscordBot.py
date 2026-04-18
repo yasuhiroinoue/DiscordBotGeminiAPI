@@ -25,7 +25,6 @@ image_chat = {}
 load_dotenv()
 
 MODEL_ID = os.getenv("MODEL_ID")
-MODEL_ID = os.getenv("MODEL_ID")
 # IMAGEN_MODEL = os.getenv("IMAGEN_MODEL") # Deprecated
 GEMINI_IMAGE_MODEL = os.getenv("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image")
 
@@ -333,7 +332,6 @@ async def save_response_as_file(message, response_text):
 
 #################
 from typing import Any
-import logging
 
 
 def process_answer(answer: Any) -> str:
@@ -793,9 +791,6 @@ async def split_and_send_messages(message_system, text, max_length):
 
         await message_system.channel.send(text[start:end].strip())
         start = end
-
-
-import logging
 
 
 # Removed old generate_image function
