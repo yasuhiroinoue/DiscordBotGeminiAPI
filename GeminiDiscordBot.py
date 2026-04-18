@@ -331,27 +331,22 @@ async def process_text_message(message, cleaned_text, save_to_file=False):
 
 
 async def save_response_as_file(message, response_text):
-    """
-    Saves the response as a markdown file and sends it to the Discord channel.
-    """
-    # Generate filename with timestamp
+    """Saves the response as a markdown file and sends it with an inline preview in a single message."""
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"gemini_response_{timestamp}.md"
 
-    # Create file object with response text
     file = discord.File(io.StringIO(response_text), filename=filename)
 
-    # Send message with attached file
-    await message.channel.send(f"💾 Here's your response as a file:", file=file)
-
-    # Preview of the first few lines (optional)
-    preview_lines = response_text.split("\n")[:5]  # First 5 lines
+    preview_lines = response_text.split("\n")[:5]
     preview = "\n".join(preview_lines)
     if len(preview_lines) >= 5:
         preview += "\n..."
 
-    if preview.strip():  # Send preview if content exists
-        await message.channel.send(f"📝 Preview:\n```\n{preview}\n```")
+    content = "💾 Here's your response as a file:"
+    if preview.strip():
+        content += f"\n📝 Preview:\n```\n{preview}\n```"
+
+    await message.channel.send(content, file=file)
 
 
 #################
