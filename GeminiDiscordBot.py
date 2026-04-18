@@ -39,6 +39,10 @@ GCP_REGION = os.getenv("GCP_REGION")
 # The maximum number of characters per Discord message
 MAX_DISCORD_LENGTH = 2000
 
+# Supported aspect ratios for Gemini image generation
+SUPPORTED_ASPECT_RATIOS = frozenset({"1:1", "16:9", "9:16", "4:3", "3:4"})
+DEFAULT_ASPECT_RATIO = "1:1"
+
 # Load the environment variable for enabling/disabling commands
 IMG_COMMANDS_ENABLED = os.getenv("IMG_COMMANDS_ENABLED", "False").lower() == "true"
 print(f"Image commands enabled: {IMG_COMMANDS_ENABLED}")
@@ -233,7 +237,13 @@ async def on_message(message):
             elif img_command:
                 await message.add_reaction("🎨")
                 # Process !img command
-                prompt_text, aspect_ratio = await parse_args(prompt_text)
+                prompt_text, aspect_ratio, invalid_ratio = await parse_args(prompt_text)
+                if invalid_ratio is not None:
+                    supported = ", ".join(sorted(SUPPORTED_ASPECT_RATIOS))
+                    await message.channel.send(
+                        f"Unsupported aspect_ratio `{invalid_ratio}`. "
+                        f"Supported values: {supported}. Falling back to `{DEFAULT_ASPECT_RATIO}`."
+                    )
                 await message.channel.send(f"Prompt: {prompt_text}")
                 await handle_generation(message, prompt_text, aspect_ratio)
 
@@ -903,16 +913,26 @@ async def handle_edit_generation(message, prompt):
 
 
 async def parse_args(args):
-    """
-    Parses arguments for image generation.
+    """Parses arguments for image generation.
+
     Expected format: prompt | aspect_ratio
+
+    Returns:
+        (prompt, aspect_ratio, invalid_ratio) where invalid_ratio is None
+        when the ratio is supported or omitted, and is the original input
+        string otherwise (so the caller can notify the user).
     """
     parts = [part.strip() for part in args.split("|")]
     prompt = parts[0] if len(parts) > 0 else ""
-    aspect_ratio = "1:1" # Default to 1:1 as it is standard, or keep 16:9 if preferred
-    if len(parts) > 1:
-        aspect_ratio = parts[1]
-    return prompt, aspect_ratio
+    aspect_ratio = DEFAULT_ASPECT_RATIO
+    invalid_ratio = None
+    if len(parts) > 1 and parts[1]:
+        requested = parts[1]
+        if requested in SUPPORTED_ASPECT_RATIOS:
+            aspect_ratio = requested
+        else:
+            invalid_ratio = requested
+    return prompt, aspect_ratio, invalid_ratio
 
 async def download_attachments_as_parts(message):
     """Downloads attachments and returns them as a list of types.Part."""
