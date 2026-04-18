@@ -124,7 +124,19 @@ chat_model = genai.Client(vertexai=True, project=GCP_PROJECT_ID, location=GCP_RE
 # Initialize Discord bot
 intents = discord.Intents.default()
 intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents)
+
+
+class GeminiBot(commands.Bot):
+    async def setup_hook(self) -> None:
+        self.http_session = aiohttp.ClientSession()
+
+    async def close(self) -> None:
+        if getattr(self, "http_session", None) is not None:
+            await self.http_session.close()
+        await super().close()
+
+
+bot = GeminiBot(command_prefix="!", intents=intents)
 
 
 @bot.event
@@ -254,14 +266,13 @@ async def process_attachments(message, cleaned_text, save_to_file=False):
     # Collect all attachments
     for attachment in message.attachments:
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(attachment.url) as resp:
-                    if resp.status != 200:
-                        await message.channel.send(f"Unable to download the file: {attachment.filename}")
-                        continue
-                    file_data = await resp.read()
-                    mime_type = get_mime_type_from_bytes(file_data)
-                    files_data.append({"data": file_data, "mime_type": mime_type})
+            async with bot.http_session.get(attachment.url) as resp:
+                if resp.status != 200:
+                    await message.channel.send(f"Unable to download the file: {attachment.filename}")
+                    continue
+                file_data = await resp.read()
+                mime_type = get_mime_type_from_bytes(file_data)
+                files_data.append({"data": file_data, "mime_type": mime_type})
         except aiohttp.ClientError as e:
             await message.channel.send(f"Failed to download the file {attachment.filename}: {e}")
         except Exception as e:
@@ -634,30 +645,29 @@ async def download_from_dropbox(message, url):
             await message.add_reaction("☁️")  # Reaction indicating cloud processing
 
             # Download file
-            async with aiohttp.ClientSession() as session:
-                async with session.get(download_url) as resp:
-                    if resp.status != 200:
-                        await message.add_reaction("❌")
-                        raise ValueError(
-                            f"Failed to download from Dropbox. Status: {resp.status}"
-                        )
+            async with bot.http_session.get(download_url) as resp:
+                if resp.status != 200:
+                    await message.add_reaction("❌")
+                    raise ValueError(
+                        f"Failed to download from Dropbox. Status: {resp.status}"
+                    )
 
-                    file_data = await resp.read()
-                    mime_type = get_mime_type_from_bytes(file_data)
+                file_data = await resp.read()
+                mime_type = get_mime_type_from_bytes(file_data)
 
-                    # If in debug mode, save the file locally
-                    if DEBUG_SAVE_CLOUD_FILES:
-                        debug_path = save_debug_file(
-                            file_data, "dropbox", url, mime_type
-                        )
-                        if debug_path:
-                            await message.add_reaction(
-                                "💾"
-                            )  # Reaction indicating successful save
+                # If in debug mode, save the file locally
+                if DEBUG_SAVE_CLOUD_FILES:
+                    debug_path = save_debug_file(
+                        file_data, "dropbox", url, mime_type
+                    )
+                    if debug_path:
+                        await message.add_reaction(
+                            "💾"
+                        )  # Reaction indicating successful save
 
-                    # Reaction indicating download complete
-                    await message.add_reaction("✅")
-                    return file_data, mime_type
+                # Reaction indicating download complete
+                await message.add_reaction("✅")
+                return file_data, mime_type
     except Exception as e:
         await message.add_reaction("❌")
         raise ValueError(f"Error downloading from Dropbox: {str(e)}")
@@ -693,52 +703,51 @@ async def download_from_google_drive(message, url):
             download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
 
             # Download file
-            async with aiohttp.ClientSession() as session:
-                async with session.get(download_url) as resp:
-                    if resp.status != 200:
-                        await message.add_reaction("❌")
-                        raise ValueError(
-                            f"Failed to download from Google Drive. Status: {resp.status}"
-                        )
+            async with bot.http_session.get(download_url) as resp:
+                if resp.status != 200:
+                    await message.add_reaction("❌")
+                    raise ValueError(
+                        f"Failed to download from Google Drive. Status: {resp.status}"
+                    )
 
-                    # Check cookies to see if a confirmation page for a large file was returned
-                    if "Content-Disposition" not in resp.headers:
-                        # Confirmation token is required for large files
-                        body = await resp.text()
-                        confirm_token = re.search(r"confirm=([0-9A-Za-z]+)", body)
-                        if confirm_token:
-                            # Re-download using the confirmation token
-                            confirm_url = f"https://drive.google.com/uc?export=download&id={file_id}&confirm={confirm_token.group(1)}"
-                            async with session.get(confirm_url) as confirm_resp:
-                                if confirm_resp.status != 200:
-                                    await message.add_reaction("❌")
-                                    raise ValueError(
-                                        f"Failed to download large file from Google Drive. Status: {confirm_resp.status}"
-                                    )
+                # Check cookies to see if a confirmation page for a large file was returned
+                if "Content-Disposition" not in resp.headers:
+                    # Confirmation token is required for large files
+                    body = await resp.text()
+                    confirm_token = re.search(r"confirm=([0-9A-Za-z]+)", body)
+                    if confirm_token:
+                        # Re-download using the confirmation token
+                        confirm_url = f"https://drive.google.com/uc?export=download&id={file_id}&confirm={confirm_token.group(1)}"
+                        async with bot.http_session.get(confirm_url) as confirm_resp:
+                            if confirm_resp.status != 200:
+                                await message.add_reaction("❌")
+                                raise ValueError(
+                                    f"Failed to download large file from Google Drive. Status: {confirm_resp.status}"
+                                )
 
-                                file_data = await confirm_resp.read()
-                        else:
-                            # If confirmation token is not found, use the initial response
-                            file_data = await resp.read()
+                            file_data = await confirm_resp.read()
                     else:
-                        # For normal files
+                        # If confirmation token is not found, use the initial response
                         file_data = await resp.read()
+                else:
+                    # For normal files
+                    file_data = await resp.read()
 
-                    mime_type = get_mime_type_from_bytes(file_data)
+                mime_type = get_mime_type_from_bytes(file_data)
 
-                    # If in debug mode, save the file locally
-                    if DEBUG_SAVE_CLOUD_FILES:
-                        debug_path = save_debug_file(
-                            file_data, "gdrive", url, mime_type
-                        )
-                        if debug_path:
-                            await message.add_reaction(
-                                "💾"
-                            )  # Reaction indicating successful save
+                # If in debug mode, save the file locally
+                if DEBUG_SAVE_CLOUD_FILES:
+                    debug_path = save_debug_file(
+                        file_data, "gdrive", url, mime_type
+                    )
+                    if debug_path:
+                        await message.add_reaction(
+                            "💾"
+                        )  # Reaction indicating successful save
 
-                    # Reaction indicating download complete
-                    await message.add_reaction("✅")
-                    return file_data, mime_type
+                # Reaction indicating download complete
+                await message.add_reaction("✅")
+                return file_data, mime_type
     except Exception as e:
         await message.add_reaction("❌")
         raise ValueError(f"Error downloading from Google Drive: {str(e)}")
@@ -908,12 +917,11 @@ async def download_attachments_as_parts(message):
     if message.attachments:
         for attachment in message.attachments:
             try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(attachment.url) as resp:
-                        if resp.status == 200:
-                            data = await resp.read()
-                            mime_type = get_mime_type_from_bytes(data)
-                            parts.append(types.Part.from_bytes(data=data, mime_type=mime_type))
+                async with bot.http_session.get(attachment.url) as resp:
+                    if resp.status == 200:
+                        data = await resp.read()
+                        mime_type = get_mime_type_from_bytes(data)
+                        parts.append(types.Part.from_bytes(data=data, mime_type=mime_type))
             except Exception as e:
                 logging.error(f"Failed to download attachment {attachment.filename}: {e}")
     return parts
