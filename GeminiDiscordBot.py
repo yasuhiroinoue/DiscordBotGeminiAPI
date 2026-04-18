@@ -274,8 +274,10 @@ async def process_attachments(message, cleaned_text, save_to_file=False):
                 mime_type = get_mime_type_from_bytes(file_data)
                 files_data.append({"data": file_data, "mime_type": mime_type})
         except aiohttp.ClientError as e:
+            logging.exception("Failed to download attachment %s", attachment.filename)
             await message.channel.send(f"Failed to download the file {attachment.filename}: {e}")
         except Exception as e:
+            logging.exception("Unexpected error while downloading attachment %s", attachment.filename)
             await message.channel.send(f"An unexpected error occurred with {attachment.filename}: {e}")
 
     if not files_data:
@@ -296,6 +298,7 @@ async def process_attachments(message, cleaned_text, save_to_file=False):
                 message, response_text, MAX_DISCORD_LENGTH
             )
     except Exception as e:
+        logging.exception("Unexpected error during response generation for attachments")
         await message.channel.send(f"An unexpected error occurred during generation: {e}")
 
 
@@ -445,8 +448,8 @@ async def generate_response_with_text(message, cleaned_text):
     try:
         answer = await chat_session.send_message(cleaned_text)
         return process_answer(answer)
-    except Exception as e:
-        print(f"An error occurred: {e}")
+    except Exception:
+        logging.exception("Error in generate_response_with_text for user %s", user_id)
         return "An error occurred while generating the response."
 
 
@@ -477,8 +480,8 @@ async def generate_response_with_files_and_text(message, files, text):
         answer = await chat_session.send_message(prompt_parts)
         return process_answer(answer)
 
-    except Exception as e:
-        print(f"An error occurred: {e}")
+    except Exception:
+        logging.exception("Error in generate_response_with_files_and_text for user %s", user_id)
         return "An error occurred while generating the response."
 
 
