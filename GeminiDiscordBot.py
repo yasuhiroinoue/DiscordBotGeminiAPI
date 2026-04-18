@@ -400,10 +400,10 @@ def process_answer(answer: Any) -> str:
                     return "\n".join(candidate_text_parts).strip()
 
             # Optionally, log the grounding metadata if available.
-            if hasattr(candidate, "groundingMetadata") and candidate.groundingMetadata:
+            if hasattr(candidate, "grounding_metadata") and candidate.grounding_metadata:
                 logging.info(
                     "Grounding metadata (rendered content): %s",
-                    candidate.groundingMetadata.searchEntryPoint.renderedContent,
+                    candidate.grounding_metadata.search_entry_point.rendered_content,
                 )
 
         # If no meaningful text is found, log the entire answer object.
