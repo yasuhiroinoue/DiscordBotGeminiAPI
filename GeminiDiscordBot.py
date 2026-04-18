@@ -20,6 +20,9 @@ import logging  # Added: logging module
 chat = {}
 # Dictionary to store image generation chat sessions
 image_chat = {}
+# Holds strong references to fire-and-forget background tasks so the GC
+# cannot cancel them mid-flight (see https://docs.python.org/3/library/asyncio-task.html#asyncio.create_task).
+_background_tasks: set[asyncio.Task] = set()
 
 # Load environment variables
 load_dotenv()
@@ -859,8 +862,10 @@ async def handle_generation(message, prompt, aspect_ratio):
             await message.channel.send(file=file)
 
         # Sync context to text chat
-        asyncio.create_task(update_text_chat_with_image(message, image_data, prompt))
-        
+        task = asyncio.create_task(update_text_chat_with_image(message, image_data, prompt))
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
+
     except ValueError as ve:
         await message.channel.send(f"Invalid input or API error: {str(ve)}")
     except Exception as e:
@@ -900,7 +905,9 @@ async def handle_edit_generation(message, prompt):
             await message.channel.send(file=file)
 
         # Sync context to text chat
-        asyncio.create_task(update_text_chat_with_image(message, image_data, prompt))
+        task = asyncio.create_task(update_text_chat_with_image(message, image_data, prompt))
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
 
     except Exception as e:
          await message.channel.send(f"Failed to edit image: {str(e)}")
