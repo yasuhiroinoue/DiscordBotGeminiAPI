@@ -1435,7 +1435,10 @@ async def _run_deep_research(
     ack_prefix = "📋 Planning" if planning_mode else "🔬 Deep Research"
     try:
         async with _dr_global_semaphore:
-            agent_config: dict = {"visualization": "auto"}
+            # The Interactions API requires a discriminator "type" field inside
+            # agent_config. Without it the server returns 400:
+            #   "Missing key 'type' in input 'agent_config'."
+            agent_config: dict = {"type": "deep-research", "visualization": "auto"}
             if planning_mode:
                 agent_config["collaborative_planning"] = True
 
