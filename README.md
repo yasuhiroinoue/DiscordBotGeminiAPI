@@ -112,11 +112,16 @@ Gemini Discord Bot allows you to converse on Discord using Google's Gemini API. 
   ```text
   !dr <topic>
   ```
+  After you send `!dr <topic>`, the bot posts two buttons:
+    - **📋 Plan first** — the agent returns a short research plan. You can then click **✅ Approve & execute**, **✏️ Refine** (opens a modal for refinement instructions), or **🛑 Abort**. Refining generates a new plan that you can iterate on again.
+    - **🚀 Run now** — skip planning and execute the research immediately (previous behavior).
   - **Topic**: The research question. The agent performs multi-step web search and synthesis.
+  - **Attachments (multimodal input)**: Attach an image or PDF to your `!dr` message to give the agent visual context. The attachments are only sent on the first call of a flow — for a plan → approve chain, they are attached to the planning call.
+  - **Visualizations**: The agent may embed PNG charts automatically when the topic asks for them (e.g., "include a chart comparing market share"). Generated images are posted alongside the report file. No configuration needed.
   - **Latency**: Several minutes to tens of minutes per job (60-minute hard cap). Normal chat remains fully responsive while a research job runs.
   - **Cost**: Approximately US$1–$7 per research depending on the model. Set `ALLOWED_USER_IDS` and keep `DEEP_RESEARCH_MAX_CONCURRENT` modest.
   - **Output**: The full report is delivered as a Markdown attachment. A compact summary is automatically injected into the text chat session so you can ask follow-ups like "summarize the key findings" or "what sources did it cite?" without re-uploading anything.
-  - **Cancel**: Send `RESET` to cancel a running research job (this also clears the chat and image history).
+  - **Cancel**: Send `RESET` to cancel a running job and clear any pending plan (also clears the chat and image history).
   - **Requires**: `DEEP_RESEARCH_API_KEY` environment variable (Google AI Studio key). The Vertex AI client used for normal chat does not currently serve the Deep Research preview models, so a separate direct API key is required.
 
 ---
