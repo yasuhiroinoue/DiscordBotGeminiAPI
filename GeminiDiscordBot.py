@@ -104,7 +104,18 @@ if not ALLOWED_USER_IDS:
 else:
     print(f"Allowed user IDs: {ALLOWED_USER_IDS}")
 
-# Configure logging for user interactions
+# Root logging configuration: make logging.info / logging.exception calls
+# visible on stderr. Without this, the default root logger level is WARNING
+# and our .info diagnostics (Deep Research output shape, grounding metadata,
+# etc.) would be silently dropped.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+
+# Dedicated access log for user interactions. Does not propagate so it only
+# writes to bot_usage.log, not stderr.
 log_formatter = logging.Formatter(
     "%(asctime)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
 )
