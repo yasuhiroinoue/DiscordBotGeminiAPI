@@ -108,6 +108,17 @@ Gemini Discord Bot allows you to converse on Discord using Google's Gemini API. 
   - After generating or editing an image, it is automatically shared with the text chat.
   - You can immediately ask questions about the image in the normal chat (e.g., "Describe the architecture").
 
+- **Deep Research**: Use the `!dr` command to run Google's Gemini Deep Research agent in the background.
+  ```text
+  !dr <topic>
+  ```
+  - **Topic**: The research question. The agent performs multi-step web search and synthesis.
+  - **Latency**: Several minutes to tens of minutes per job (60-minute hard cap). Normal chat remains fully responsive while a research job runs.
+  - **Cost**: Approximately US$1–$7 per research depending on the model. Set `ALLOWED_USER_IDS` and keep `DEEP_RESEARCH_MAX_CONCURRENT` modest.
+  - **Output**: The full report is delivered as a Markdown attachment. A compact summary is automatically injected into the text chat session so you can ask follow-ups like "summarize the key findings" or "what sources did it cite?" without re-uploading anything.
+  - **Cancel**: Send `RESET` to cancel a running research job (this also clears the chat and image history).
+  - **Requires**: `DEEP_RESEARCH_API_KEY` environment variable (Google AI Studio key). The Vertex AI client used for normal chat does not currently serve the Deep Research preview models, so a separate direct API key is required.
+
 ---
 
 ## Security Considerations

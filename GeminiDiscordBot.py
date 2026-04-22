@@ -8,7 +8,9 @@ import asyncio
 import magic
 import discord
 import tempfile
+import time
 import urllib.parse
+from dataclasses import dataclass
 from discord.ext import commands
 from dotenv import load_dotenv
 from google import genai
@@ -23,6 +25,21 @@ image_chat = {}
 # Holds strong references to fire-and-forget background tasks so the GC
 # cannot cancel them mid-flight (see https://docs.python.org/3/library/asyncio-task.html#asyncio.create_task).
 _background_tasks: set[asyncio.Task] = set()
+
+
+@dataclass
+class DeepResearchJob:
+    user_id: int
+    topic: str
+    interaction_id: str
+    task: asyncio.Task
+    ack_channel_id: int
+    ack_message_id: int
+    started_at: float  # time.monotonic() at job start
+
+
+# Per-user running Deep Research jobs. Only one concurrent job per user.
+deep_research_jobs: dict[int, DeepResearchJob] = {}
 
 # Load environment variables
 load_dotenv()
@@ -45,6 +62,14 @@ MAX_DISCORD_LENGTH = 2000
 # Supported aspect ratios for Gemini image generation
 SUPPORTED_ASPECT_RATIOS = frozenset({"1:1", "16:9", "9:16", "4:3", "3:4"})
 DEFAULT_ASPECT_RATIO = "1:1"
+
+# Deep Research (Route B: direct Gemini API key, separate from the Vertex client)
+DEEP_RESEARCH_API_KEY = os.getenv("DEEP_RESEARCH_API_KEY")
+DEEP_RESEARCH_AGENT = os.getenv("DEEP_RESEARCH_AGENT", "deep-research-preview-04-2026")
+DEEP_RESEARCH_MAX_CONCURRENT = int(os.getenv("DEEP_RESEARCH_MAX_CONCURRENT", "2"))
+DEEP_RESEARCH_POLL_SECONDS = int(os.getenv("DEEP_RESEARCH_POLL_SECONDS", "20"))
+DEEP_RESEARCH_TIMEOUT_SECONDS = int(os.getenv("DEEP_RESEARCH_TIMEOUT_SECONDS", "3900"))
+_dr_global_semaphore = asyncio.Semaphore(DEEP_RESEARCH_MAX_CONCURRENT)
 
 # Load the environment variable for enabling/disabling commands
 IMG_COMMANDS_ENABLED = os.getenv("IMG_COMMANDS_ENABLED", "False").lower() == "true"
@@ -79,7 +104,18 @@ if not ALLOWED_USER_IDS:
 else:
     print(f"Allowed user IDs: {ALLOWED_USER_IDS}")
 
-# Configure logging for user interactions
+# Root logging configuration: make logging.info / logging.exception calls
+# visible on stderr. Without this, the default root logger level is WARNING
+# and our .info diagnostics (Deep Research output shape, grounding metadata,
+# etc.) would be silently dropped.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+
+# Dedicated access log for user interactions. Does not propagate so it only
+# writes to bot_usage.log, not stderr.
 log_formatter = logging.Formatter(
     "%(asctime)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
 )
@@ -127,6 +163,14 @@ generate_content_config = types.GenerateContentConfig(
 
 # Initialize Vertex AI API
 chat_model = genai.Client(vertexai=True, project=GCP_PROJECT_ID, location=GCP_REGION)
+
+# Initialize a separate direct-API client for Deep Research, which is not
+# currently served over Vertex AI for the preview models.
+dr_client = genai.Client(api_key=DEEP_RESEARCH_API_KEY) if DEEP_RESEARCH_API_KEY else None
+if dr_client is None:
+    print("Deep Research disabled: DEEP_RESEARCH_API_KEY not set.")
+else:
+    print(f"Deep Research enabled (agent={DEEP_RESEARCH_AGENT}, max_concurrent={DEEP_RESEARCH_MAX_CONCURRENT}).")
 
 # Initialize Discord bot
 intents = discord.Intents.default()
@@ -191,6 +235,7 @@ async def on_message(message):
         save_to_file = False
         img_command = False
         edit_command = False
+        dr_command = False
 
         # Detect !save command
         if cleaned_text.startswith("!save "):
@@ -216,6 +261,27 @@ async def on_message(message):
                 return
             edit_command = True
             prompt_text = cleaned_text.replace("!edit ", "", 1)
+
+        # Detect !dr command (Deep Research). Match both "!dr" and "!dr ..."
+        # so a bare "!dr" shows usage instead of falling through to chat and
+        # wasting an API call.
+        elif cleaned_text == "!dr" or cleaned_text.startswith("!dr "):
+            if dr_client is None:
+                await message.channel.send(
+                    "Deep Research is disabled (DEEP_RESEARCH_API_KEY not set)."
+                )
+                return
+            if message.author.id in deep_research_jobs:
+                await message.channel.send(
+                    "You already have a Deep Research job running. Wait for it to finish or send `RESET` to cancel."
+                )
+                return
+            topic = cleaned_text[4:].strip()
+            if not topic:
+                await message.channel.send("Usage: `!dr <topic>`")
+                return
+            dr_command = True
+            prompt_text = topic
 
         async with message.channel.typing():
             # Process cloud storage link (if exists)
@@ -255,6 +321,15 @@ async def on_message(message):
                 # Process !edit command
                 await message.channel.send(f"Editing: {prompt_text}")
                 await handle_edit_generation(message, prompt_text)
+
+            elif dr_command:
+                await message.add_reaction("🔬")
+                ack = await message.channel.send(
+                    f"🔬 Deep Research started: **{prompt_text}**\nStatus: queued…"
+                )
+                task = asyncio.create_task(_run_deep_research(message, prompt_text, ack))
+                _background_tasks.add(task)
+                task.add_done_callback(_background_tasks.discard)
 
             elif message.attachments:
                 await process_attachments(message, cleaned_text, save_to_file)
@@ -320,6 +395,9 @@ async def process_text_message(message, cleaned_text, save_to_file=False):
     if re.search(r"^RESET$", cleaned_text, re.IGNORECASE):
         chat.pop(message.author.id, None)
         image_chat.pop(message.author.id, None)
+        job = deep_research_jobs.pop(message.author.id, None)
+        if job is not None:
+            job.task.cancel()
         await message.channel.send(f"🧹 History (Text & Image) Reset for user: {message.author.name}")
         return
 
@@ -977,6 +1055,235 @@ async def update_text_chat_with_image(message, image_data, prompt_text):
         
     except Exception as e:
         logging.error(f"Failed to update text chat context: {e}")
+
+
+def _build_dr_injection(topic: str, report_text: str) -> str:
+    """Build a compact summary (≤1500 chars) of a Deep Research report to feed back
+    into the user's regular chat session as a new turn. Uses regex-only extraction
+    from the first 2000 chars so it costs nothing extra and stays deterministic.
+    """
+    head = report_text[:2000]
+    bullets: list[str] = []
+    for line in head.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        m = re.match(r"^#{1,3}\s+(.+)$", stripped)
+        if m:
+            bullets.append(m.group(1).strip())
+        else:
+            m = re.match(r"^[-*]\s+(.+)$", stripped)
+            if m:
+                bullets.append(m.group(1).strip())
+        if len(bullets) >= 8:
+            break
+    bullets_text = "\n".join(f"- {b[:120]}" for b in bullets) or "- (no bullets extracted)"
+    injection = (
+        f"[Deep Research completed — topic: \"{topic}\"]\n"
+        f"Key findings:\n{bullets_text}\n"
+        f"The full report has been posted as a .md attachment in this channel.\n"
+        f"You may reference it when the user asks follow-up questions."
+    )
+    return injection[:1500]
+
+
+async def _inject_dr_summary(message, topic: str, report_text: str) -> None:
+    """Append the Deep Research summary as a new turn in the user's text chat session.
+    Mirrors update_text_chat_with_image so follow-ups like "summarize the research"
+    naturally work via the regular chat path.
+    """
+    global chat
+    user_id = message.author.id
+    chat_session = chat.get(user_id)
+    if not chat_session:
+        chat_session = chat_model.aio.chats.create(
+            model=MODEL_ID,
+            config=generate_content_config,
+        )
+        chat[user_id] = chat_session
+    try:
+        await chat_session.send_message(_build_dr_injection(topic, report_text))
+        logging.info("Injected Deep Research summary into chat session for user %s", user_id)
+    except Exception:
+        logging.exception("Failed to inject Deep Research summary for user %s", user_id)
+
+
+async def _run_deep_research(message, topic: str, ack) -> None:
+    """Fire-and-forget task that drives a Deep Research interaction to completion.
+
+    Responsibilities:
+    - Gate via _dr_global_semaphore (global concurrency cap).
+    - Register state in deep_research_jobs so RESET and the per-user lock can see it.
+    - Poll client.interactions.get every DEEP_RESEARCH_POLL_SECONDS, edit the ack
+      message every ~60s as a heartbeat.
+    - On completion, post the full report via save_response_as_file, post a one-line
+      channel summary, and inject a compact summary into the text chat session.
+    - Handle cancel/timeout/failure paths with ack edits and emoji reactions.
+    """
+    user_id = message.author.id
+    started = time.monotonic()
+    last_heartbeat = 0.0
+    interaction_id: str | None = None
+    try:
+        async with _dr_global_semaphore:
+            try:
+                interaction = await asyncio.to_thread(
+                    dr_client.interactions.create,
+                    agent=DEEP_RESEARCH_AGENT,
+                    input=topic,
+                    background=True,
+                    store=True,
+                )
+            except Exception as e:
+                logging.exception("Deep Research create failed for user %s", user_id)
+                try:
+                    await ack.edit(content=f"❌ Failed to start Deep Research: {e}")
+                except Exception:
+                    logging.exception("Failed to edit ack on create failure")
+                await message.add_reaction("❌")
+                return
+
+            interaction_id = interaction.id
+            deep_research_jobs[user_id] = DeepResearchJob(
+                user_id=user_id,
+                topic=topic,
+                interaction_id=interaction_id,
+                task=asyncio.current_task(),
+                ack_channel_id=ack.channel.id,
+                ack_message_id=ack.id,
+                started_at=started,
+            )
+
+            await ack.edit(
+                content=(
+                    f"🔬 Deep Research running\n"
+                    f"Topic: **{topic}**\n"
+                    f"id: `{interaction_id}`\n"
+                    f"elapsed 0m, status={interaction.status}"
+                )
+            )
+            last_heartbeat = time.monotonic()
+
+            while True:
+                elapsed = time.monotonic() - started
+                if elapsed > DEEP_RESEARCH_TIMEOUT_SECONDS:
+                    await ack.edit(
+                        content=(
+                            f"⏱️ Deep Research timed out after {int(elapsed / 60)}m\n"
+                            f"Topic: **{topic}**\n"
+                            f"id: `{interaction_id}`"
+                        )
+                    )
+                    await message.add_reaction("❌")
+                    return
+
+                await asyncio.sleep(DEEP_RESEARCH_POLL_SECONDS)
+
+                try:
+                    interaction = await asyncio.to_thread(
+                        dr_client.interactions.get, interaction_id
+                    )
+                except Exception as e:
+                    logging.exception(
+                        "Deep Research poll failed for user %s (id=%s)", user_id, interaction_id
+                    )
+                    try:
+                        await ack.edit(content=f"❌ Deep Research poll failed: {e}")
+                    except Exception:
+                        logging.exception("Failed to edit ack on poll failure")
+                    await message.add_reaction("❌")
+                    return
+
+                if interaction.status in ("completed", "failed"):
+                    break
+
+                if time.monotonic() - last_heartbeat >= 60:
+                    elapsed_min = int((time.monotonic() - started) / 60)
+                    try:
+                        await ack.edit(
+                            content=(
+                                f"🔬 Deep Research running\n"
+                                f"Topic: **{topic}**\n"
+                                f"id: `{interaction_id}`\n"
+                                f"elapsed {elapsed_min}m, status={interaction.status}"
+                            )
+                        )
+                    except Exception:
+                        logging.exception("Failed to edit heartbeat for user %s", user_id)
+                    last_heartbeat = time.monotonic()
+
+            elapsed_min = int((time.monotonic() - started) / 60)
+
+            if interaction.status == "completed":
+                try:
+                    outputs = interaction.outputs or []
+                    # Deep Research returns multiple outputs (report body, sources,
+                    # thought summaries, visualizations). The last one is typically
+                    # the citations list, not the body, so concatenate every output
+                    # that exposes a text attribute.
+                    logging.info(
+                        "Deep Research completed for user %s: %d outputs, types=%s",
+                        user_id,
+                        len(outputs),
+                        [getattr(o, "type", "?") for o in outputs],
+                    )
+                    parts = [t for t in (getattr(o, "text", None) for o in outputs) if t]
+                    report_text = "\n\n".join(parts).strip()
+                except Exception:
+                    report_text = ""
+                    logging.exception("Failed to extract report text for user %s", user_id)
+
+                if not report_text:
+                    await ack.edit(
+                        content=(
+                            f"⚠️ Deep Research completed but returned empty output\n"
+                            f"Topic: **{topic}**\n"
+                            f"id: `{interaction_id}`"
+                        )
+                    )
+                    await message.add_reaction("⚠️")
+                    return
+
+                await save_response_as_file(message, report_text)
+                await message.channel.send(
+                    f"✅ Deep Research completed ({elapsed_min}m) — topic: **{topic}**"
+                )
+                await _inject_dr_summary(message, topic, report_text)
+                await message.add_reaction("✅")
+                await ack.edit(
+                    content=(
+                        f"✅ Deep Research completed ({elapsed_min}m)\n"
+                        f"Topic: **{topic}**\n"
+                        f"id: `{interaction_id}`"
+                    )
+                )
+            else:  # failed
+                error_msg = getattr(interaction, "error", "<unknown>")
+                await message.channel.send(f"❌ Deep Research failed: {error_msg}")
+                await ack.edit(
+                    content=(
+                        f"❌ Deep Research failed ({elapsed_min}m)\n"
+                        f"Topic: **{topic}**\n"
+                        f"id: `{interaction_id}`\n"
+                        f"error: {error_msg}"
+                    )
+                )
+                await message.add_reaction("❌")
+
+    except asyncio.CancelledError:
+        try:
+            await ack.edit(content=f"🛑 Deep Research cancelled\nTopic: **{topic}**")
+        except Exception:
+            logging.exception("Failed to edit ack on cancel")
+        raise
+    except Exception:
+        logging.exception("Deep Research task failed unexpectedly for user %s", user_id)
+        try:
+            await ack.edit(content=f"❌ Deep Research encountered an unexpected error\nTopic: **{topic}**")
+        except Exception:
+            logging.exception("Failed to edit ack on unexpected error")
+    finally:
+        deep_research_jobs.pop(user_id, None)
 
 
 # Run the bot
