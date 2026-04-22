@@ -1205,7 +1205,19 @@ async def _run_deep_research(message, topic: str, ack) -> None:
 
             if interaction.status == "completed":
                 try:
-                    report_text = interaction.outputs[-1].text if interaction.outputs else ""
+                    outputs = interaction.outputs or []
+                    # Deep Research returns multiple outputs (report body, sources,
+                    # thought summaries, visualizations). The last one is typically
+                    # the citations list, not the body, so concatenate every output
+                    # that exposes a text attribute.
+                    logging.info(
+                        "Deep Research completed for user %s: %d outputs, types=%s",
+                        user_id,
+                        len(outputs),
+                        [getattr(o, "type", "?") for o in outputs],
+                    )
+                    parts = [t for t in (getattr(o, "text", None) for o in outputs) if t]
+                    report_text = "\n\n".join(parts).strip()
                 except Exception:
                     report_text = ""
                     logging.exception("Failed to extract report text for user %s", user_id)
