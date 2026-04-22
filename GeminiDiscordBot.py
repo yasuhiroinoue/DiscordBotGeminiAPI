@@ -65,7 +65,7 @@ DEFAULT_ASPECT_RATIO = "1:1"
 
 # Deep Research (Route B: direct Gemini API key, separate from the Vertex client)
 DEEP_RESEARCH_API_KEY = os.getenv("DEEP_RESEARCH_API_KEY")
-DEEP_RESEARCH_MODEL = os.getenv("DEEP_RESEARCH_MODEL", "deep-research-preview-04-2026")
+DEEP_RESEARCH_AGENT = os.getenv("DEEP_RESEARCH_AGENT", "deep-research-preview-04-2026")
 DEEP_RESEARCH_MAX_CONCURRENT = int(os.getenv("DEEP_RESEARCH_MAX_CONCURRENT", "2"))
 DEEP_RESEARCH_POLL_SECONDS = int(os.getenv("DEEP_RESEARCH_POLL_SECONDS", "20"))
 DEEP_RESEARCH_TIMEOUT_SECONDS = int(os.getenv("DEEP_RESEARCH_TIMEOUT_SECONDS", "3900"))
@@ -159,7 +159,7 @@ dr_client = genai.Client(api_key=DEEP_RESEARCH_API_KEY) if DEEP_RESEARCH_API_KEY
 if dr_client is None:
     print("Deep Research disabled: DEEP_RESEARCH_API_KEY not set.")
 else:
-    print(f"Deep Research enabled (model={DEEP_RESEARCH_MODEL}, max_concurrent={DEEP_RESEARCH_MAX_CONCURRENT}).")
+    print(f"Deep Research enabled (agent={DEEP_RESEARCH_AGENT}, max_concurrent={DEEP_RESEARCH_MAX_CONCURRENT}).")
 
 # Initialize Discord bot
 intents = discord.Intents.default()
@@ -1116,7 +1116,7 @@ async def _run_deep_research(message, topic: str, ack) -> None:
             try:
                 interaction = await asyncio.to_thread(
                     dr_client.interactions.create,
-                    model=DEEP_RESEARCH_MODEL,
+                    agent=DEEP_RESEARCH_AGENT,
                     input=topic,
                     background=True,
                     store=True,
