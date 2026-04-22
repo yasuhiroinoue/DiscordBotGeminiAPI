@@ -251,8 +251,10 @@ async def on_message(message):
             edit_command = True
             prompt_text = cleaned_text.replace("!edit ", "", 1)
 
-        # Detect !dr command (Deep Research)
-        elif cleaned_text.startswith("!dr "):
+        # Detect !dr command (Deep Research). Match both "!dr" and "!dr ..."
+        # so a bare "!dr" shows usage instead of falling through to chat and
+        # wasting an API call.
+        elif cleaned_text == "!dr" or cleaned_text.startswith("!dr "):
             if dr_client is None:
                 await message.channel.send(
                     "Deep Research is disabled (DEEP_RESEARCH_API_KEY not set)."
