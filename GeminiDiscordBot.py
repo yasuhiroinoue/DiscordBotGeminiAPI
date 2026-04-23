@@ -1671,10 +1671,37 @@ async def _run_deep_research(
                                     logging.exception(
                                         "Failed to decode Deep Research image %d", i
                                     )
+                            continue
+                        # Skip internal reasoning traces emitted by MAX-tier
+                        # agents (type='thought' / 'reasoning'). They are CoT,
+                        # not part of the report body.
+                        if typ in ("thought", "reasoning"):
+                            continue
+                        txt = getattr(out, "text", None)
+                        if not txt:
+                            # Fallback for Responses-style outputs where text
+                            # lives under .content[*].text instead of a flat
+                            # .text accessor.
+                            content = getattr(out, "content", None)
+                            if isinstance(content, list):
+                                collected: list[str] = []
+                                for part in content:
+                                    t = getattr(part, "text", None)
+                                    if t:
+                                        collected.append(t)
+                                if collected:
+                                    txt = "".join(collected)
+                        if txt:
+                            text_parts.append(txt)
+                            logging.info(
+                                "DR output[%d] type=%s included (len=%d)",
+                                i, typ, len(txt),
+                            )
                         else:
-                            txt = getattr(out, "text", None)
-                            if txt:
-                                text_parts.append(txt)
+                            logging.info(
+                                "DR output[%d] type=%s skipped (no text)",
+                                i, typ,
+                            )
                     result_text = "\n\n".join(text_parts).strip()
                 except Exception:
                     result_text = ""
