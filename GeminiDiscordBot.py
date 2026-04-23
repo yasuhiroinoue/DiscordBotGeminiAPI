@@ -1139,6 +1139,30 @@ async def _inject_dr_summary(message, topic: str, report_text: str) -> None:
         logging.exception("Failed to inject Deep Research summary for user %s", user_id)
 
 
+def _build_dr_input(text: str, attachments: list | None):
+    """Build the `input` argument for `dr_client.interactions.create`.
+
+    Returns a plain string when there are no attachments, otherwise the
+    list-of-typed-content-dicts shape the Interactions API expects:
+        [{"type": "text", "text": "..."},
+         {"type": "image", "uri": "..."},
+         {"type": "document", "uri": "...", "mime_type": "..."}]
+    """
+    if not attachments:
+        return text
+    content_items: list[dict] = [{"type": "text", "text": text}]
+    for att in attachments:
+        content_type = (getattr(att, "content_type", None) or "").lower()
+        if content_type.startswith("image/"):
+            content_items.append({"type": "image", "uri": att.url})
+        else:
+            item = {"type": "document", "uri": att.url}
+            if content_type:
+                item["mime_type"] = content_type
+            content_items.append(item)
+    return content_items
+
+
 class PlanOrDirectView(discord.ui.View):
     """Initial UI shown after `!dr <topic>`. Picks plan-first vs direct-run."""
 
@@ -1287,6 +1311,10 @@ class PlanDecisionView(discord.ui.View):
         exec_ack = await interaction.channel.send(
             f"🔬 Deep Research starting (execute): **{self.topic}**\nStatus: queued…"
         )
+        origin_attachments = (
+            list(self.origin_message.attachments)
+            if self.origin_message.attachments else []
+        )
         task = asyncio.create_task(
             _run_deep_research(
                 self.origin_message,
@@ -1295,6 +1323,7 @@ class PlanDecisionView(discord.ui.View):
                 planning_mode=False,
                 previous_interaction_id=self.plan_interaction_id,
                 input_override="Execute the plan.",
+                attachments=origin_attachments,
             )
         )
         _background_tasks.add(task)
@@ -1392,6 +1421,10 @@ class RefineModal(discord.ui.Modal, title="Refine Deep Research Plan"):
         refine_ack = await interaction.channel.send(
             f"📋 Refining plan with: {text[:200]}\nTopic: **{self.topic}**"
         )
+        origin_attachments = (
+            list(self.origin_message.attachments)
+            if self.origin_message.attachments else []
+        )
         task = asyncio.create_task(
             _run_deep_research(
                 self.origin_message,
@@ -1400,6 +1433,7 @@ class RefineModal(discord.ui.Modal, title="Refine Deep Research Plan"):
                 planning_mode=True,
                 previous_interaction_id=self.plan_interaction_id,
                 input_override=text,
+                attachments=origin_attachments,
             )
         )
         _background_tasks.add(task)
@@ -1441,26 +1475,15 @@ async def _run_deep_research(
                 agent_config["collaborative_planning"] = True
 
             if previous_interaction_id is None:
-                if attachments:
-                    # Interactions API expects a list of typed content dicts with
-                    # URI references (not google-genai Part objects). Discord
-                    # attachment URLs are signed but accessible, which is enough
-                    # for the agent to fetch within the job lifetime.
-                    content_items: list[dict] = [{"type": "text", "text": topic}]
-                    for att in attachments:
-                        content_type = (getattr(att, "content_type", None) or "").lower()
-                        if content_type.startswith("image/"):
-                            content_items.append({"type": "image", "uri": att.url})
-                        else:
-                            item = {"type": "document", "uri": att.url}
-                            if content_type:
-                                item["mime_type"] = content_type
-                            content_items.append(item)
-                    effective_input = content_items
-                else:
-                    effective_input = topic
+                effective_input = _build_dr_input(topic, attachments)
             else:
-                effective_input = input_override or "Execute the plan."
+                # Refine / approve. Include the original attachments again so
+                # the shape (list of typed content dicts) matches the initial
+                # call; passing plain text here broke the previous_interaction_id
+                # context chain for multimodal plans — the server treated the
+                # refinement as a brand-new task rather than an addition.
+                text_for_chain = input_override or "Execute the plan."
+                effective_input = _build_dr_input(text_for_chain, attachments)
 
             create_kwargs = dict(
                 agent=DEEP_RESEARCH_AGENT,
