@@ -346,15 +346,13 @@ async def on_message(message):
 
             elif dr_command:
                 await message.add_reaction("🔬")
-                attachments = (
-                    await download_attachments_as_parts(message)
-                    if message.attachments else []
-                )
+                # Keep attachments as discord.Attachment refs; the Interactions
+                # API fetches them by URI, so we do not need to download bytes.
                 view = PlanOrDirectView(
                     user_id=message.author.id,
                     topic=prompt_text,
                     origin_message=message,
-                    attachments=attachments,
+                    attachments=list(message.attachments),
                 )
                 ack = await message.channel.send(
                     f"🔬 Deep Research requested: **{prompt_text}**\n"
@@ -1443,9 +1441,24 @@ async def _run_deep_research(
                 agent_config["collaborative_planning"] = True
 
             if previous_interaction_id is None:
-                effective_input = (
-                    [topic, *attachments] if attachments else topic
-                )
+                if attachments:
+                    # Interactions API expects a list of typed content dicts with
+                    # URI references (not google-genai Part objects). Discord
+                    # attachment URLs are signed but accessible, which is enough
+                    # for the agent to fetch within the job lifetime.
+                    content_items: list[dict] = [{"type": "text", "text": topic}]
+                    for att in attachments:
+                        content_type = (getattr(att, "content_type", None) or "").lower()
+                        if content_type.startswith("image/"):
+                            content_items.append({"type": "image", "uri": att.url})
+                        else:
+                            item = {"type": "document", "uri": att.url}
+                            if content_type:
+                                item["mime_type"] = content_type
+                            content_items.append(item)
+                    effective_input = content_items
+                else:
+                    effective_input = topic
             else:
                 effective_input = input_override or "Execute the plan."
 
