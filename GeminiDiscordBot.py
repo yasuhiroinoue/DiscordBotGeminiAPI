@@ -207,6 +207,51 @@ class GeminiBot(commands.Bot):
 bot = GeminiBot(command_prefix="!", intents=intents)
 
 
+def _build_help_text() -> str:
+    """Build the `!help` response. Reflects current env-based feature toggles."""
+    img_note = "" if IMG_COMMANDS_ENABLED else "\n⚠️ 現在この機能は無効化されています。"
+    dr_note = "" if dr_client is not None else "\n⚠️ 現在この機能は無効化されています。"
+    return (
+        "📖 **Gemini Discord Bot コマンド一覧**\n"
+        "\n"
+        "このボットには DM を送るか、サーバーで bot をメンションして話しかけてください。\n"
+        "\n"
+        "**💬 通常のチャット**\n"
+        "そのまま文章を送るとやりとりできます。会話履歴はユーザーごとに保持されます。\n"
+        "画像・PDF などを添付すると、その内容を踏まえて回答します（複数添付可）。\n"
+        "Dropbox / Google Drive の共有リンクも自動で取り込みます。\n"
+        "\n"
+        "**💾 `!save <質問>` — 回答を Markdown ファイルとして受け取る**\n"
+        "長文回答が欲しいときに便利。添付ファイルも一緒に送れます。\n"
+        "例: `!save この PDF の要点を詳しくまとめて`\n"
+        "\n"
+        "**🎨 `!img <プロンプト> | <アスペクト比>` — 画像生成**\n"
+        "アスペクト比は `1:1` / `16:9` / `9:16` / `4:3` / `3:4` から選択（省略時は `1:1`）。\n"
+        "参照画像を添付することもできます。\n"
+        "例: `!img 近未来都市の夜景 | 16:9`"
+        f"{img_note}\n"
+        "\n"
+        "**✏️ `!edit <指示>` — 直前に生成した画像を編集**\n"
+        "同じセッション内で追加指示を重ねられます。\n"
+        "例: `!edit 夜にして、空飛ぶ車を追加`"
+        f"{img_note}\n"
+        "\n"
+        "**🔬 `!dr <トピック>` — Deep Research（長時間のバックグラウンド調査）**\n"
+        "Google の Deep Research エージェントが Web を巡回し、調査レポート（Markdown）を返します。\n"
+        "・ボタン UI で「計画を先に確認」または「即時実行」を選べます。\n"
+        "・PDF・画像を添付すると、その資料を踏まえて調査します。\n"
+        "・所要時間は数分〜数十分（その間も通常のチャットは動きます）。\n"
+        "・1 回あたり US$1–$7 程度のコストがかかるため乱用に注意。\n"
+        "・完了後、要点が会話履歴に自動注入されるので追加質問がそのままできます。"
+        f"{dr_note}\n"
+        "\n"
+        "**🧹 `RESET` — 会話履歴と実行中ジョブをクリア**\n"
+        "大文字でそのまま `RESET` と送ると、テキスト・画像の履歴と実行中の Deep Research ジョブをすべてリセットします。\n"
+        "\n"
+        "**📖 `!help` — このヘルプを表示**\n"
+    )
+
+
 @bot.event
 async def on_ready():
     """Triggered when the bot has successfully connected."""
@@ -304,6 +349,11 @@ async def on_message(message):
                 return
             dr_command = True
             prompt_text = topic
+
+        if cleaned_text == "!help" or cleaned_text.startswith("!help "):
+            await message.add_reaction("💡")
+            await split_and_send_messages(message, _build_help_text(), MAX_DISCORD_LENGTH)
+            return
 
         async with message.channel.typing():
             # Process cloud storage link (if exists)

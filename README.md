@@ -84,6 +84,7 @@ Gemini Discord Bot allows you to converse on Discord using Google's Gemini API. 
 - **Text Conversation**: Mention the bot or send a direct message (DM) to start a conversation.
 - **File Recognition**: Upload a file, with or without accompanying text, and the bot will analyze and respond to its content.
 - **Reset Conversation History**: Send `RESET` to clear the conversation history.
+- **Help**: Send `!help` to show the Japanese command reference inside Discord. The message reflects the current feature toggles (`IMG_COMMANDS_ENABLED`, `DEEP_RESEARCH_API_KEY`) so disabled commands are marked accordingly.
 - **Image Generation**: Use the `!img` command to start a new image generation session.
   ```text
   !img <prompt> | <aspect_ratio>
