@@ -5,6 +5,7 @@ import aiohttp
 import io
 
 import asyncio
+import base64
 import magic
 import discord
 import tempfile
@@ -40,6 +41,22 @@ class DeepResearchJob:
 
 # Per-user running Deep Research jobs. Only one concurrent job per user.
 deep_research_jobs: dict[int, DeepResearchJob] = {}
+
+
+@dataclass
+class DeepResearchPlan:
+    user_id: int
+    topic: str
+    plan_interaction_id: str   # latest planning interaction id (chain target)
+    plan_text: str              # most recent plan text for display
+    channel_id: int             # where the plan was posted
+    created_at: float
+
+
+# Per-user pending plans awaiting an Approve / Refine / Abort decision.
+# Invariant: for any user_id, at most one of deep_research_jobs[user_id]
+# and deep_research_plans[user_id] is set at any time.
+deep_research_plans: dict[int, DeepResearchPlan] = {}
 
 # Load environment variables
 load_dotenv()
@@ -276,6 +293,11 @@ async def on_message(message):
                     "You already have a Deep Research job running. Wait for it to finish or send `RESET` to cancel."
                 )
                 return
+            if message.author.id in deep_research_plans:
+                await message.channel.send(
+                    "You already have a pending Deep Research plan. Approve, refine, or abort it first (or send `RESET`)."
+                )
+                return
             topic = cleaned_text[4:].strip()
             if not topic:
                 await message.channel.send("Usage: `!dr <topic>`")
@@ -324,12 +346,20 @@ async def on_message(message):
 
             elif dr_command:
                 await message.add_reaction("🔬")
-                ack = await message.channel.send(
-                    f"🔬 Deep Research started: **{prompt_text}**\nStatus: queued…"
+                # Keep attachments as discord.Attachment refs; the Interactions
+                # API fetches them by URI, so we do not need to download bytes.
+                view = PlanOrDirectView(
+                    user_id=message.author.id,
+                    topic=prompt_text,
+                    origin_message=message,
+                    attachments=list(message.attachments),
                 )
-                task = asyncio.create_task(_run_deep_research(message, prompt_text, ack))
-                _background_tasks.add(task)
-                task.add_done_callback(_background_tasks.discard)
+                ack = await message.channel.send(
+                    f"🔬 Deep Research requested: **{prompt_text}**\n"
+                    f"Choose a flow below.",
+                    view=view,
+                )
+                view.ack = ack
 
             elif message.attachments:
                 await process_attachments(message, cleaned_text, save_to_file)
@@ -398,6 +428,7 @@ async def process_text_message(message, cleaned_text, save_to_file=False):
         job = deep_research_jobs.pop(message.author.id, None)
         if job is not None:
             job.task.cancel()
+        deep_research_plans.pop(message.author.id, None)
         await message.channel.send(f"🧹 History (Text & Image) Reset for user: {message.author.name}")
         return
 
@@ -1108,39 +1139,377 @@ async def _inject_dr_summary(message, topic: str, report_text: str) -> None:
         logging.exception("Failed to inject Deep Research summary for user %s", user_id)
 
 
-async def _run_deep_research(message, topic: str, ack) -> None:
+def _build_dr_input(text: str, attachments: list | None):
+    """Build the `input` argument for `dr_client.interactions.create`.
+
+    Returns a plain string when there are no attachments, otherwise the
+    list-of-typed-content-dicts shape the Interactions API expects:
+        [{"type": "text", "text": "..."},
+         {"type": "image", "uri": "..."},
+         {"type": "document", "uri": "...", "mime_type": "..."}]
+    """
+    if not attachments:
+        return text
+    content_items: list[dict] = [{"type": "text", "text": text}]
+    for att in attachments:
+        content_type = (getattr(att, "content_type", None) or "").lower()
+        if content_type.startswith("image/"):
+            content_items.append({"type": "image", "uri": att.url})
+        else:
+            item = {"type": "document", "uri": att.url}
+            if content_type:
+                item["mime_type"] = content_type
+            content_items.append(item)
+    return content_items
+
+
+class PlanOrDirectView(discord.ui.View):
+    """Initial UI shown after `!dr <topic>`. Picks plan-first vs direct-run."""
+
+    def __init__(
+        self,
+        *,
+        user_id: int,
+        topic: str,
+        origin_message: discord.Message,
+        attachments: list,
+        timeout: float = 300,
+    ):
+        super().__init__(timeout=timeout)
+        self.user_id = user_id
+        self.topic = topic
+        self.origin_message = origin_message
+        self.attachments = attachments
+        self.ack: discord.Message | None = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(
+                "This Deep Research request isn't yours.", ephemeral=True
+            )
+            return False
+        return True
+
+    async def on_timeout(self) -> None:
+        for child in self.children:
+            child.disabled = True
+        if self.ack is not None:
+            try:
+                await self.ack.edit(
+                    content=f"⏱️ Deep Research request timed out (no selection)\nTopic: **{self.topic}**",
+                    view=self,
+                )
+            except Exception:
+                logging.exception("PlanOrDirectView on_timeout edit failed")
+
+    def _spawn(self, *, planning_mode: bool) -> None:
+        task = asyncio.create_task(
+            _run_deep_research(
+                self.origin_message,
+                self.topic,
+                self.ack,
+                planning_mode=planning_mode,
+                attachments=self.attachments,
+            )
+        )
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
+
+    @discord.ui.button(label="📋 Plan first", style=discord.ButtonStyle.primary)
+    async def plan_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.user_id in deep_research_jobs:
+            await interaction.response.send_message(
+                "You already have a Deep Research job running.", ephemeral=True
+            )
+            return
+        self.stop()
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(
+            content=f"📋 Preparing plan for: **{self.topic}**…",
+            view=self,
+        )
+        self._spawn(planning_mode=True)
+
+    @discord.ui.button(label="🚀 Run now", style=discord.ButtonStyle.success)
+    async def direct_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.user_id in deep_research_jobs:
+            await interaction.response.send_message(
+                "You already have a Deep Research job running.", ephemeral=True
+            )
+            return
+        self.stop()
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(
+            content=f"🔬 Deep Research starting: **{self.topic}**…",
+            view=self,
+        )
+        self._spawn(planning_mode=False)
+
+
+class PlanDecisionView(discord.ui.View):
+    """Plan review UI shown after a planning call completes."""
+
+    def __init__(
+        self,
+        *,
+        user_id: int,
+        topic: str,
+        plan_interaction_id: str,
+        origin_message: discord.Message,
+        timeout: float = 1800,
+    ):
+        super().__init__(timeout=timeout)
+        self.user_id = user_id
+        self.topic = topic
+        self.plan_interaction_id = plan_interaction_id
+        self.origin_message = origin_message
+        self.ack: discord.Message | None = None
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id:
+            await interaction.response.send_message(
+                "This plan isn't yours.", ephemeral=True
+            )
+            return False
+        return True
+
+    def _plan_is_fresh(self) -> bool:
+        current = deep_research_plans.get(self.user_id)
+        return current is not None and current.plan_interaction_id == self.plan_interaction_id
+
+    async def on_timeout(self) -> None:
+        for child in self.children:
+            child.disabled = True
+        if self.ack is not None:
+            try:
+                await self.ack.edit(content="⏱️ Plan decision timed out.", view=self)
+            except Exception:
+                logging.exception("PlanDecisionView on_timeout edit failed")
+
+    @discord.ui.button(label="✅ Approve & execute", style=discord.ButtonStyle.success)
+    async def approve_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self._plan_is_fresh():
+            await interaction.response.send_message(
+                "This plan has been reset. Please start a new `!dr` request.", ephemeral=True
+            )
+            return
+        if self.user_id in deep_research_jobs:
+            await interaction.response.send_message(
+                "You already have a Deep Research job running.", ephemeral=True
+            )
+            return
+        deep_research_plans.pop(self.user_id, None)
+        self.stop()
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(
+            content=f"✅ Approved — executing research on **{self.topic}**",
+            view=self,
+        )
+        exec_ack = await interaction.channel.send(
+            f"🔬 Deep Research starting (execute): **{self.topic}**\nStatus: queued…"
+        )
+        origin_attachments = (
+            list(self.origin_message.attachments)
+            if self.origin_message.attachments else []
+        )
+        task = asyncio.create_task(
+            _run_deep_research(
+                self.origin_message,
+                self.topic,
+                exec_ack,
+                planning_mode=False,
+                previous_interaction_id=self.plan_interaction_id,
+                input_override="Execute the plan.",
+                attachments=origin_attachments,
+            )
+        )
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
+
+    @discord.ui.button(label="✏️ Refine", style=discord.ButtonStyle.primary)
+    async def refine_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self._plan_is_fresh():
+            await interaction.response.send_message(
+                "This plan has been reset. Please start a new `!dr` request.", ephemeral=True
+            )
+            return
+        if self.user_id in deep_research_jobs:
+            await interaction.response.send_message(
+                "You already have a Deep Research job running.", ephemeral=True
+            )
+            return
+        await interaction.response.send_modal(
+            RefineModal(
+                user_id=self.user_id,
+                topic=self.topic,
+                plan_interaction_id=self.plan_interaction_id,
+                origin_message=self.origin_message,
+                view=self,
+            )
+        )
+
+    @discord.ui.button(label="🛑 Abort", style=discord.ButtonStyle.danger)
+    async def abort_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        deep_research_plans.pop(self.user_id, None)
+        self.stop()
+        for child in self.children:
+            child.disabled = True
+        await interaction.response.edit_message(
+            content=f"🛑 Plan aborted: **{self.topic}**",
+            view=self,
+        )
+
+
+class RefineModal(discord.ui.Modal, title="Refine Deep Research Plan"):
+    refinement = discord.ui.TextInput(
+        label="Refinement instructions",
+        style=discord.TextStyle.paragraph,
+        placeholder="e.g., Include more on cost and power consumption.",
+        max_length=2000,
+        required=True,
+    )
+
+    def __init__(
+        self,
+        *,
+        user_id: int,
+        topic: str,
+        plan_interaction_id: str,
+        origin_message: discord.Message,
+        view: "PlanDecisionView",
+    ):
+        super().__init__()
+        self.user_id = user_id
+        self.topic = topic
+        self.plan_interaction_id = plan_interaction_id
+        self.origin_message = origin_message
+        self.parent_view = view
+
+    async def on_submit(self, interaction: discord.Interaction):
+        text = self.refinement.value.strip()
+        if not text:
+            await interaction.response.send_message("Empty refinement ignored.", ephemeral=True)
+            return
+        if self.user_id in deep_research_jobs:
+            await interaction.response.send_message(
+                "You already have a Deep Research job running.", ephemeral=True
+            )
+            return
+        current = deep_research_plans.get(self.user_id)
+        if current is None or current.plan_interaction_id != self.plan_interaction_id:
+            await interaction.response.send_message(
+                "This plan has been reset. Please start a new `!dr` request.", ephemeral=True
+            )
+            return
+
+        await interaction.response.send_message("✏️ Refining plan…", ephemeral=True)
+
+        # Clear the prior plan; a new one will replace it when refinement completes.
+        deep_research_plans.pop(self.user_id, None)
+        self.parent_view.stop()
+        for child in self.parent_view.children:
+            child.disabled = True
+        if self.parent_view.ack is not None:
+            try:
+                await self.parent_view.ack.edit(view=self.parent_view)
+            except Exception:
+                logging.exception("Failed to disable old PlanDecisionView on refine")
+
+        refine_ack = await interaction.channel.send(
+            f"📋 Refining plan with: {text[:200]}\nTopic: **{self.topic}**"
+        )
+        origin_attachments = (
+            list(self.origin_message.attachments)
+            if self.origin_message.attachments else []
+        )
+        task = asyncio.create_task(
+            _run_deep_research(
+                self.origin_message,
+                self.topic,
+                refine_ack,
+                planning_mode=True,
+                previous_interaction_id=self.plan_interaction_id,
+                input_override=text,
+                attachments=origin_attachments,
+            )
+        )
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
+
+
+async def _run_deep_research(
+    message,
+    topic: str,
+    ack,
+    *,
+    planning_mode: bool = False,
+    previous_interaction_id: str | None = None,
+    input_override: str | None = None,
+    attachments: list | None = None,
+) -> None:
     """Fire-and-forget task that drives a Deep Research interaction to completion.
 
-    Responsibilities:
-    - Gate via _dr_global_semaphore (global concurrency cap).
-    - Register state in deep_research_jobs so RESET and the per-user lock can see it.
-    - Poll client.interactions.get every DEEP_RESEARCH_POLL_SECONDS, edit the ack
-      message every ~60s as a heartbeat.
-    - On completion, post the full report via save_response_as_file, post a one-line
-      channel summary, and inject a compact summary into the text chat session.
-    - Handle cancel/timeout/failure paths with ack edits and emoji reactions.
+    Modes:
+    - planning_mode=True: run a collaborative-planning call. On completion,
+      store the plan in deep_research_plans and attach a PlanDecisionView.
+    - planning_mode=False (default): run execution. May chain from a previous
+      plan via previous_interaction_id. On completion, post the .md report,
+      inject a compact summary into the text chat session, and post any
+      generated visualization images.
     """
     user_id = message.author.id
     started = time.monotonic()
     last_heartbeat = 0.0
     interaction_id: str | None = None
+    ack_prefix = "📋 Planning" if planning_mode else "🔬 Deep Research"
     try:
         async with _dr_global_semaphore:
+            # The Interactions API requires a discriminator "type" field inside
+            # agent_config. Without it the server returns 400:
+            #   "Missing key 'type' in input 'agent_config'."
+            agent_config: dict = {"type": "deep-research", "visualization": "auto"}
+            if planning_mode:
+                agent_config["collaborative_planning"] = True
+
+            if previous_interaction_id is None:
+                effective_input = _build_dr_input(topic, attachments)
+            else:
+                # Refine / approve. Include the original attachments again so
+                # the shape (list of typed content dicts) matches the initial
+                # call; passing plain text here broke the previous_interaction_id
+                # context chain for multimodal plans — the server treated the
+                # refinement as a brand-new task rather than an addition.
+                text_for_chain = input_override or "Execute the plan."
+                effective_input = _build_dr_input(text_for_chain, attachments)
+
+            create_kwargs = dict(
+                agent=DEEP_RESEARCH_AGENT,
+                input=effective_input,
+                agent_config=agent_config,
+                background=True,
+                store=True,
+            )
+            if previous_interaction_id is not None:
+                create_kwargs["previous_interaction_id"] = previous_interaction_id
+
             try:
                 interaction = await asyncio.to_thread(
-                    dr_client.interactions.create,
-                    agent=DEEP_RESEARCH_AGENT,
-                    input=topic,
-                    background=True,
-                    store=True,
+                    dr_client.interactions.create, **create_kwargs
                 )
             except Exception as e:
-                logging.exception("Deep Research create failed for user %s", user_id)
+                logging.exception(
+                    "Deep Research create failed for user %s (planning_mode=%s)",
+                    user_id, planning_mode,
+                )
                 try:
-                    await ack.edit(content=f"❌ Failed to start Deep Research: {e}")
+                    await ack.edit(content=f"❌ Failed to start Deep Research: {e}", view=None)
                 except Exception:
                     logging.exception("Failed to edit ack on create failure")
-                await message.add_reaction("❌")
+                if not planning_mode:
+                    await message.add_reaction("❌")
                 return
 
             interaction_id = interaction.id
@@ -1156,11 +1525,12 @@ async def _run_deep_research(message, topic: str, ack) -> None:
 
             await ack.edit(
                 content=(
-                    f"🔬 Deep Research running\n"
+                    f"{ack_prefix} running\n"
                     f"Topic: **{topic}**\n"
                     f"id: `{interaction_id}`\n"
                     f"elapsed 0m, status={interaction.status}"
-                )
+                ),
+                view=None,
             )
             last_heartbeat = time.monotonic()
 
@@ -1169,12 +1539,14 @@ async def _run_deep_research(message, topic: str, ack) -> None:
                 if elapsed > DEEP_RESEARCH_TIMEOUT_SECONDS:
                     await ack.edit(
                         content=(
-                            f"⏱️ Deep Research timed out after {int(elapsed / 60)}m\n"
+                            f"⏱️ {ack_prefix} timed out after {int(elapsed / 60)}m\n"
                             f"Topic: **{topic}**\n"
                             f"id: `{interaction_id}`"
-                        )
+                        ),
+                        view=None,
                     )
-                    await message.add_reaction("❌")
+                    if not planning_mode:
+                        await message.add_reaction("❌")
                     return
 
                 await asyncio.sleep(DEEP_RESEARCH_POLL_SECONDS)
@@ -1185,13 +1557,17 @@ async def _run_deep_research(message, topic: str, ack) -> None:
                     )
                 except Exception as e:
                     logging.exception(
-                        "Deep Research poll failed for user %s (id=%s)", user_id, interaction_id
+                        "Deep Research poll failed for user %s (id=%s)",
+                        user_id, interaction_id,
                     )
                     try:
-                        await ack.edit(content=f"❌ Deep Research poll failed: {e}")
+                        await ack.edit(
+                            content=f"❌ Deep Research poll failed: {e}", view=None
+                        )
                     except Exception:
                         logging.exception("Failed to edit ack on poll failure")
-                    await message.add_reaction("❌")
+                    if not planning_mode:
+                        await message.add_reaction("❌")
                     return
 
                 if interaction.status in ("completed", "failed"):
@@ -1202,11 +1578,12 @@ async def _run_deep_research(message, topic: str, ack) -> None:
                     try:
                         await ack.edit(
                             content=(
-                                f"🔬 Deep Research running\n"
+                                f"{ack_prefix} running\n"
                                 f"Topic: **{topic}**\n"
                                 f"id: `{interaction_id}`\n"
                                 f"elapsed {elapsed_min}m, status={interaction.status}"
-                            )
+                            ),
+                            view=None,
                         )
                     except Exception:
                         logging.exception("Failed to edit heartbeat for user %s", user_id)
@@ -1217,69 +1594,147 @@ async def _run_deep_research(message, topic: str, ack) -> None:
             if interaction.status == "completed":
                 try:
                     outputs = interaction.outputs or []
-                    # Deep Research returns multiple outputs (report body, sources,
-                    # thought summaries, visualizations). The last one is typically
-                    # the citations list, not the body, so concatenate every output
-                    # that exposes a text attribute.
                     logging.info(
-                        "Deep Research completed for user %s: %d outputs, types=%s",
-                        user_id,
-                        len(outputs),
+                        "Deep Research completed for user %s (planning_mode=%s): %d outputs, types=%s",
+                        user_id, planning_mode, len(outputs),
                         [getattr(o, "type", "?") for o in outputs],
                     )
-                    parts = [t for t in (getattr(o, "text", None) for o in outputs) if t]
-                    report_text = "\n\n".join(parts).strip()
+                    text_parts: list[str] = []
+                    image_files: list[discord.File] = []
+                    for i, out in enumerate(outputs):
+                        typ = getattr(out, "type", None)
+                        if typ == "image":
+                            raw = getattr(out, "data", None)
+                            if raw:
+                                try:
+                                    img_bytes = (
+                                        base64.b64decode(raw)
+                                        if isinstance(raw, str) else bytes(raw)
+                                    )
+                                    image_files.append(
+                                        discord.File(
+                                            io.BytesIO(img_bytes),
+                                            filename=f"dr_viz_{i}.png",
+                                        )
+                                    )
+                                except Exception:
+                                    logging.exception(
+                                        "Failed to decode Deep Research image %d", i
+                                    )
+                        else:
+                            txt = getattr(out, "text", None)
+                            if txt:
+                                text_parts.append(txt)
+                    result_text = "\n\n".join(text_parts).strip()
                 except Exception:
-                    report_text = ""
-                    logging.exception("Failed to extract report text for user %s", user_id)
+                    result_text = ""
+                    image_files = []
+                    logging.exception("Failed to extract result for user %s", user_id)
 
-                if not report_text:
+                if not result_text:
                     await ack.edit(
                         content=(
-                            f"⚠️ Deep Research completed but returned empty output\n"
+                            f"⚠️ {ack_prefix} completed but returned empty output\n"
                             f"Topic: **{topic}**\n"
                             f"id: `{interaction_id}`"
-                        )
+                        ),
+                        view=None,
                     )
-                    await message.add_reaction("⚠️")
+                    if not planning_mode:
+                        await message.add_reaction("⚠️")
                     return
 
-                await save_response_as_file(message, report_text)
-                await message.channel.send(
-                    f"✅ Deep Research completed ({elapsed_min}m) — topic: **{topic}**"
-                )
-                await _inject_dr_summary(message, topic, report_text)
-                await message.add_reaction("✅")
-                await ack.edit(
-                    content=(
-                        f"✅ Deep Research completed ({elapsed_min}m)\n"
-                        f"Topic: **{topic}**\n"
-                        f"id: `{interaction_id}`"
+                if planning_mode:
+                    deep_research_plans[user_id] = DeepResearchPlan(
+                        user_id=user_id,
+                        topic=topic,
+                        plan_interaction_id=interaction_id,
+                        plan_text=result_text,
+                        channel_id=ack.channel.id,
+                        created_at=started,
                     )
-                )
+                    header = f"📋 Deep Research plan ({elapsed_min}m) — topic: **{topic}**"
+                    combined = f"{header}\n\n{result_text}"
+                    if len(combined) <= MAX_DISCORD_LENGTH:
+                        await message.channel.send(combined)
+                    else:
+                        await message.channel.send(header)
+                        await split_and_send_messages(
+                            message, result_text, MAX_DISCORD_LENGTH
+                        )
+                    decision_view = PlanDecisionView(
+                        user_id=user_id,
+                        topic=topic,
+                        plan_interaction_id=interaction_id,
+                        origin_message=message,
+                    )
+                    decision_ack = await message.channel.send(
+                        "Approve, refine, or abort this plan:",
+                        view=decision_view,
+                    )
+                    decision_view.ack = decision_ack
+                    await ack.edit(
+                        content=(
+                            f"📋 Plan ready ({elapsed_min}m)\n"
+                            f"Topic: **{topic}**\n"
+                            f"id: `{interaction_id}`"
+                        ),
+                        view=None,
+                    )
+                    # No ✅ reaction yet — only the final execute gets it.
+                else:
+                    await save_response_as_file(message, result_text)
+                    await message.channel.send(
+                        f"✅ Deep Research completed ({elapsed_min}m) — topic: **{topic}**"
+                    )
+                    await _inject_dr_summary(message, topic, result_text)
+                    for chunk_start in range(0, len(image_files), 10):
+                        chunk = image_files[chunk_start:chunk_start + 10]
+                        header = (
+                            "🖼️ Visualizations"
+                            if len(image_files) <= 10
+                            else f"🖼️ Visualizations ({chunk_start + 1}-{chunk_start + len(chunk)} of {len(image_files)})"
+                        )
+                        await message.channel.send(content=header, files=chunk)
+                    await message.add_reaction("✅")
+                    await ack.edit(
+                        content=(
+                            f"✅ Deep Research completed ({elapsed_min}m)\n"
+                            f"Topic: **{topic}**\n"
+                            f"id: `{interaction_id}`"
+                        ),
+                        view=None,
+                    )
             else:  # failed
                 error_msg = getattr(interaction, "error", "<unknown>")
-                await message.channel.send(f"❌ Deep Research failed: {error_msg}")
+                await message.channel.send(f"❌ {ack_prefix} failed: {error_msg}")
                 await ack.edit(
                     content=(
-                        f"❌ Deep Research failed ({elapsed_min}m)\n"
+                        f"❌ {ack_prefix} failed ({elapsed_min}m)\n"
                         f"Topic: **{topic}**\n"
                         f"id: `{interaction_id}`\n"
                         f"error: {error_msg}"
-                    )
+                    ),
+                    view=None,
                 )
-                await message.add_reaction("❌")
+                if not planning_mode:
+                    await message.add_reaction("❌")
 
     except asyncio.CancelledError:
         try:
-            await ack.edit(content=f"🛑 Deep Research cancelled\nTopic: **{topic}**")
+            await ack.edit(
+                content=f"🛑 {ack_prefix} cancelled\nTopic: **{topic}**", view=None
+            )
         except Exception:
             logging.exception("Failed to edit ack on cancel")
         raise
     except Exception:
         logging.exception("Deep Research task failed unexpectedly for user %s", user_id)
         try:
-            await ack.edit(content=f"❌ Deep Research encountered an unexpected error\nTopic: **{topic}**")
+            await ack.edit(
+                content=f"❌ {ack_prefix} encountered an unexpected error\nTopic: **{topic}**",
+                view=None,
+            )
         except Exception:
             logging.exception("Failed to edit ack on unexpected error")
     finally:
