@@ -1671,10 +1671,20 @@ async def _run_deep_research(
                                     logging.exception(
                                         "Failed to decode Deep Research image %d", i
                                     )
+                            logging.info("DR output[%d] type=%s image", i, typ)
                         else:
                             txt = getattr(out, "text", None)
                             if txt:
                                 text_parts.append(txt)
+                                logging.info(
+                                    "DR output[%d] type=%s text_len=%d included",
+                                    i, typ, len(txt),
+                                )
+                            else:
+                                logging.info(
+                                    "DR output[%d] type=%s skipped (no text)",
+                                    i, typ,
+                                )
                     result_text = "\n\n".join(text_parts).strip()
                 except Exception:
                     result_text = ""
