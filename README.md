@@ -5,18 +5,20 @@ Gemini Discord Bot allows you to converse on Discord using Google's Gemini API. 
 ## Features
 
 - **Text-based Conversation**: Utilizes the Gemini API for natural language conversations.
-- **Image Recognition**: Recognizes and responds to the content of uploaded images.
-- **File Recognition**: Analyzes and responds to the content of uploaded files.
-- **Conversation History**: Maintains user-specific conversation history for context-aware responses.
-- **History Reset**: Resets the conversation history when the user sends `RESET`.
-- **Discord Mentions and Special Characters Handling**: Processes mentions and special characters appropriately and sends clean text to the Gemini API.
-- **Long Message Splitting**: Splits messages exceeding Discord's 2000-character limit into smaller chunks for seamless transmission.
-- **Google Search Tool**: Generates responses based on Google Search results.
-- **Cloud File Download**: If a message contains shared links from Dropbox or Google Drive, the bot will download the linked files and include their content when sending the message to Gemini.
+- **Image & File Recognition**: Analyzes and responds to the content of uploaded images and files.
 - **Multimodal Support**: Attach multiple files (images, PDFs, etc.) in a single message for analysis.
-- **Image Generation (Gemini 2.5 Flash)**: Generates high-quality images using the Gemini 2.5 Flash Image model.
-- **Multi-turn Image Editing**: Edit generated images conversationally using `!edit`.
-- **Context Synchronization**: Automatically shares generated/edited images with the main chat, allowing for immediate follow-up questions (e.g., "What is in this image?").
+- **Conversation History**: Maintains user-specific conversation history for context-aware responses.
+- **History Reset**: Resets the conversation history (and cancels running Deep Research jobs) when the user sends `RESET`.
+- **Discord Mentions and Special Characters Handling**: Processes mentions and special characters appropriately and sends clean text to the Gemini API.
+- **Markdown-safe Message Splitting**: Splits responses over Discord's 2000-character limit without breaking fenced code blocks (the closing fence is kept balanced across messages and code indentation is preserved).
+- **Google Search Tool**: Grounds responses with Google Search results.
+- **Cloud File Download**: If a message contains shared links from Dropbox or Google Drive, the bot downloads the linked files and includes their content when sending the message to Gemini.
+- **Save to File (`!save`)**: Returns the response as a Markdown file attachment (useful for long answers); attachments can be sent alongside.
+- **Deep Research (`!dr`)**: Runs Google's Gemini Deep Research agent in the background — plan / refine / execute via Discord buttons, multimodal input, and automatic chart visualizations. Requires a separate direct API key (see Setup).
+- **Image Generation (`!img`)**: Generates images with the configured Gemini image model (`GEMINI_IMAGE_MODEL`). Disabled unless `IMG_COMMANDS_ENABLED=true`.
+- **Multi-turn Image Editing (`!edit`)**: Edit the last generated image conversationally within the same session.
+- **Context Synchronization**: Automatically shares generated/edited images with the main chat, allowing immediate follow-up questions (e.g., "What is in this image?").
+- **In-Discord Help (`!help`)**: Shows a Japanese command reference that reflects the current feature toggles.
 
 ---
 
@@ -25,29 +27,46 @@ Gemini Discord Bot allows you to converse on Discord using Google's Gemini API. 
 1. **Create a Discord Bot**:
    - Create a bot on the [Discord Developer Portal](https://discord.com/developers/applications) and obtain the Bot Token.
 
-2. **Obtain a Google AI Studio API Key**:
-   - Get an API Key from [Google AI Studio](https://makersuite.google.com/).
-   - Alternatively, if using Vertex AI API, configure your Google Cloud Platform project credentials.
+2. **Set up Google Gemini access**:
+   - **Normal chat / vision / image commands (default): Vertex AI.** The bot creates its main client with `genai.Client(vertexai=True, ...)`, so configure a Google Cloud project (`GCP_PROJECT_ID`, `GCP_REGION`) and authenticate (e.g. `gcloud auth application-default login`). `GOOGLE_AI_KEY` is **not** required for this default setup — it only applies if you switch the main client to the direct Gemini API (the commented-out client in `GeminiDiscordBot.py`).
+   - **Deep Research (`!dr`): direct Gemini API key.** The Deep Research preview models are not served over Vertex AI, so `!dr` needs a separate `DEEP_RESEARCH_API_KEY` from [Google AI Studio](https://aistudio.google.com/). Leave it empty to disable `!dr`.
 
 3. **Set Environment Variables**:
-   - Create a `.env` file and set the following variables:
+   - The simplest path is to copy the provided sample and edit it — `env.sample` is the source of truth and lists every variable with its default:
+
+     ```bash
+     cp env.sample .env
+     ```
+
+   - Key variables:
 
      ```env
-     DISCORD_BOT_TOKEN=Your Discord Bot Token
-     MODEL_ID="gemini-3-pro-preview" # or your preferred model
-     # IMAGEN_MODEL="imagen-3.0-generate-001" # Deprecated
-     GEMINI_IMAGE_MODEL="gemini-2.5-flash-image" # New image generation model
-     
-     # Create at https://makersuite.google.com/
-     GOOGLE_AI_KEY=Your Google AI Studio API Key
-     
-     # GCP_PROJECT_ID=Your Google Cloud Platform Project ID # Required for Vertex AI
-     # GCP_REGION=Your Google Cloud Platform Region # Required for Vertex AI
-     
-     IMG_COMMANDS_ENABLED=True/False # Enable/Disable image generation commands (default: False)
-     ALLOWED_USER_IDS=yyyyyyyyyyxxxxx,yyyyyyyyyyyyyyy # Comma-separated list of Discord User IDs. If not set, all users can interact.
-     DEBUG_SAVE_CLOUD_FILES=True/False # Enable/Disable saving of downloaded cloud files for debugging (default: False)
-     DEBUG_LOG_USER_IDS=True/False # Enable/Disable logging of user IDs for debugging (default: False)
+     # --- Required ---
+     DISCORD_BOT_TOKEN="your-discord-bot-token"
+     GCP_PROJECT_ID="your-gcp-project-id"   # Vertex AI (normal chat)
+     GCP_REGION="us-central1"               # Vertex AI region
+
+     # --- Models ---
+     MODEL_ID="gemini-3.1-pro-preview"
+     GEMINI_IMAGE_MODEL="gemini-3-pro-image-preview"
+
+     # --- Access control (strongly recommended) ---
+     ALLOWED_USER_IDS=""   # Comma-separated Discord user IDs; empty = everyone can use the bot
+
+     # --- Optional features ---
+     IMG_COMMANDS_ENABLED="false"   # Enable !img / !edit
+     DEEP_RESEARCH_API_KEY=""       # Direct Gemini API key; enables !dr (empty = disabled)
+     # DEEP_RESEARCH_AGENT="deep-research-preview-04-2026"   # or deep-research-max-preview-04-2026
+     # DEEP_RESEARCH_MAX_CONCURRENT="2"
+     # DEEP_RESEARCH_POLL_SECONDS="20"
+     # DEEP_RESEARCH_TIMEOUT_SECONDS="3900"
+
+     # --- Debug ---
+     DEBUG_SAVE_CLOUD_FILES="false"
+     # DEBUG_FILES_DIR="debug_files"
+     DEBUG_LOG_USER_IDS="false"
+
+     # GOOGLE_AI_KEY=""   # Legacy/optional; not used by the default Vertex AI setup
      ```
 
 4. **Install Dependencies**:
@@ -55,24 +74,27 @@ Gemini Discord Bot allows you to converse on Discord using Google's Gemini API. 
    pip install -r requirements.txt
    ```
 
-5. **Tools Configuration**:
+5. **Model Configuration** (optional):
 
-   To configure the `generate_content_config` in your code, follow these guidelines:
+   Normal chat uses the `generate_content_config` defined in `GeminiDiscordBot.py`. Its current defaults are:
+   ```python
+   generate_content_config = types.GenerateContentConfig(
+       temperature=1,
+       top_p=0.95,
+       max_output_tokens=65535,
+       safety_settings=[  # all four categories set to "OFF" — see Security Considerations
+           types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="OFF"),
+           types.SafetySetting(category="HARM_CATEGORY_DANGEROUS_CONTENT", threshold="OFF"),
+           types.SafetySetting(category="HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold="OFF"),
+           types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="OFF"),
+       ],
+       tools=[types.Tool(google_search=types.GoogleSearch())],  # Google Search grounding
+       response_modalities=["TEXT"],
+   )
+   ```
+   Adjust these values in code if needed. Note the safety thresholds default to `OFF` — see [Security Considerations](#security-considerations) before deploying.
 
-   - The `tools` parameter is included by default in the configuration:
-     ```python
-     generate_content_config = types.GenerateContentConfig(
-         temperature=1,
-         top_p=0.95,
-         max_output_tokens=8192,
-         tools=tools,  # Comment out this line if you are using gemini-2.0-flash-thinking-exp
-         # safety_settings=[...],  # Example safety settings (optional)
-     )
-     ```
-
-   - **Important Note**: When using `gemini-2.0-flash-thinking-exp`, ensure that the `tools` parameter is commented out. This configuration ensures compatibility with the specific version.
-
-7. **Run the Bot**:
+6. **Run the Bot**:
    ```bash
    python GeminiDiscordBot.py
    ```
@@ -83,9 +105,13 @@ Gemini Discord Bot allows you to converse on Discord using Google's Gemini API. 
 
 - **Text Conversation**: Mention the bot or send a direct message (DM) to start a conversation.
 - **File Recognition**: Upload a file, with or without accompanying text, and the bot will analyze and respond to its content.
-- **Reset Conversation History**: Send `RESET` to clear the conversation history.
+- **Save Response as File**: Prefix your message with `!save ` to receive the answer as a Markdown file attachment instead of inline text (handy for long responses). Attachments can be included.
+  ```text
+  !save Summarize this PDF in detail
+  ```
+- **Reset Conversation History**: Send `RESET` to clear the conversation history (this also cancels any running Deep Research job and clears image history).
 - **Help**: Send `!help` to show the Japanese command reference inside Discord. The message reflects the current feature toggles (`IMG_COMMANDS_ENABLED`, `DEEP_RESEARCH_API_KEY`) so disabled commands are marked accordingly.
-- **Image Generation**: Use the `!img` command to start a new image generation session.
+- **Image Generation**: Use the `!img` command to start a new image generation session (requires `IMG_COMMANDS_ENABLED=true`).
   ```text
   !img <prompt> | <aspect_ratio>
   ```
