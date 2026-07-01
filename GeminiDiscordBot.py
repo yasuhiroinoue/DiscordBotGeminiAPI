@@ -5,7 +5,6 @@ import aiohttp
 import io
 
 import asyncio
-import base64
 import magic
 import discord
 import tempfile
@@ -20,6 +19,7 @@ import datetime  # Added: For timestamp
 import logging  # Added: logging module
 
 from markdown_utils import split_markdown_message  # Markdown-safe message splitting
+from dr_utils import extract_dr_result  # Deep Research result extraction (2.10.0 schema)
 
 # Dictionary to store chat sessions
 chat = {}
@@ -89,6 +89,12 @@ DEEP_RESEARCH_MAX_CONCURRENT = int(os.getenv("DEEP_RESEARCH_MAX_CONCURRENT", "2"
 DEEP_RESEARCH_POLL_SECONDS = int(os.getenv("DEEP_RESEARCH_POLL_SECONDS", "20"))
 DEEP_RESEARCH_TIMEOUT_SECONDS = int(os.getenv("DEEP_RESEARCH_TIMEOUT_SECONDS", "3900"))
 _dr_global_semaphore = asyncio.Semaphore(DEEP_RESEARCH_MAX_CONCURRENT)
+
+# Terminal Interactions API statuses that end polling (google-genai 2.10.0
+# InteractionStatus). "completed" is the success case; the rest are non-success
+# terminal states. Without the latter, a cancelled/incomplete/budget_exceeded
+# job would keep polling until DEEP_RESEARCH_TIMEOUT_SECONDS.
+_DR_TERMINAL_STATUSES = ("completed", "failed", "cancelled", "incomplete", "budget_exceeded")
 
 # Load the environment variable for enabling/disabling commands
 IMG_COMMANDS_ENABLED = os.getenv("IMG_COMMANDS_ENABLED", "False").lower() == "true"
@@ -1615,7 +1621,7 @@ async def _run_deep_research(
                         await message.add_reaction("❌")
                     return
 
-                if interaction.status in ("completed", "failed"):
+                if interaction.status in _DR_TERMINAL_STATUSES:
                     break
 
                 if time.monotonic() - last_heartbeat >= 60:
@@ -1638,53 +1644,22 @@ async def _run_deep_research(
 
             if interaction.status == "completed":
                 try:
-                    outputs = interaction.outputs or []
+                    result_text, image_bytes = extract_dr_result(interaction)
+                    image_files = [
+                        discord.File(io.BytesIO(b), filename=f"dr_viz_{i}.png")
+                        for i, b in enumerate(image_bytes)
+                    ]
                     logging.info(
-                        "Deep Research completed for user %s (planning_mode=%s): %d outputs, types=%s",
-                        user_id, planning_mode, len(outputs),
-                        [getattr(o, "type", "?") for o in outputs],
+                        "Deep Research completed for user %s (planning_mode=%s): "
+                        "text_len=%d, images=%d",
+                        user_id, planning_mode, len(result_text), len(image_files),
                     )
-                    text_parts: list[str] = []
-                    image_files: list[discord.File] = []
-                    for i, out in enumerate(outputs):
-                        typ = getattr(out, "type", None)
-                        if typ == "image":
-                            raw = getattr(out, "data", None)
-                            if raw:
-                                try:
-                                    img_bytes = (
-                                        base64.b64decode(raw)
-                                        if isinstance(raw, str) else bytes(raw)
-                                    )
-                                    image_files.append(
-                                        discord.File(
-                                            io.BytesIO(img_bytes),
-                                            filename=f"dr_viz_{i}.png",
-                                        )
-                                    )
-                                except Exception:
-                                    logging.exception(
-                                        "Failed to decode Deep Research image %d", i
-                                    )
-                            logging.info("DR output[%d] type=%s image", i, typ)
-                        else:
-                            txt = getattr(out, "text", None)
-                            if txt:
-                                text_parts.append(txt)
-                                logging.info(
-                                    "DR output[%d] type=%s text_len=%d included",
-                                    i, typ, len(txt),
-                                )
-                            else:
-                                logging.info(
-                                    "DR output[%d] type=%s skipped (no text)",
-                                    i, typ,
-                                )
-                    result_text = "\n\n".join(text_parts).strip()
                 except Exception:
+                    # extract_dr_result already skips bad images internally; this
+                    # only guards against an unexpected Interaction shape.
                     result_text = ""
                     image_files = []
-                    logging.exception("Failed to extract result for user %s", user_id)
+                    logging.exception("Failed to extract Deep Research result for user %s", user_id)
 
                 if not result_text:
                     await ack.edit(
@@ -1760,15 +1735,17 @@ async def _run_deep_research(
                         ),
                         view=None,
                     )
-            else:  # failed
-                error_msg = getattr(interaction, "error", "<unknown>")
-                await message.channel.send(f"❌ {ack_prefix} failed: {error_msg}")
+            else:  # non-success terminal state: failed / cancelled / incomplete / budget_exceeded
+                # Interaction has no top-level `.error` field in google-genai 2.10.0,
+                # so surface the terminal status instead of a always-"<unknown>" error.
+                status = getattr(interaction, "status", "unknown")
+                await message.channel.send(f"❌ {ack_prefix} did not complete (status: {status})")
                 await ack.edit(
                     content=(
-                        f"❌ {ack_prefix} failed ({elapsed_min}m)\n"
+                        f"❌ {ack_prefix} did not complete ({elapsed_min}m)\n"
                         f"Topic: **{topic}**\n"
                         f"id: `{interaction_id}`\n"
-                        f"error: {error_msg}"
+                        f"status: {status}"
                     ),
                     view=None,
                 )
