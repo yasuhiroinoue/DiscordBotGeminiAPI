@@ -1,5 +1,5 @@
 discord.py
 python-dotenv
-google-genai
+google-genai>=2.10.0,<2.11.0
 aiohttp
 python-magic
