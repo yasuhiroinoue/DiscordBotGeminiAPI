@@ -19,6 +19,8 @@ from google.genai import types
 import datetime  # Added: For timestamp
 import logging  # Added: logging module
 
+from markdown_utils import split_markdown_message  # Markdown-safe message splitting
+
 # Dictionary to store chat sessions
 chat = {}
 # Dictionary to store image generation chat sessions
@@ -954,22 +956,15 @@ async def process_cloud_file(
 
 
 async def split_and_send_messages(message_system, text, max_length):
-    """Split the message into chunks and send them, respecting the maximum length."""
-    start = 0
-    while start < len(text):
-        if len(text) - start <= max_length:
-            await message_system.channel.send(text[start:])
-            break
+    """Split the message on Markdown-safe boundaries and send each part.
 
-        end = start + max_length
-        while end > start and text[end - 1] not in " \n\r\t":
-            end -= 1
-
-        if end == start:
-            end = start + max_length
-
-        await message_system.channel.send(text[start:end].strip())
-        start = end
+    Delegates chunking to `split_markdown_message` (markdown_utils) so fenced
+    code blocks stay balanced across Discord's per-message length limit, and
+    code indentation is preserved (no per-chunk stripping).
+    """
+    for chunk in split_markdown_message(text, max_length):
+        if chunk:
+            await message_system.channel.send(chunk)
 
 
 # Removed old generate_image function
